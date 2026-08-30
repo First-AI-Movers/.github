@@ -9,4 +9,20 @@ For canonical company information, see:
 - Company website: <https://www.firstaimovers.com>
 - GitHub Pages bridge: <https://first-ai-movers.github.io/>
 
-This repo intentionally stays minimal — it does not host code, workflows, or templates.
+## Organization-wide defaults
+
+GitHub applies the files below to any `First-AI-Movers/*` repository that does **not** ship its own copy. A repository's own file always overrides the default.
+
+| File | Applies when a repository has no own copy |
+|---|---|
+| [`SECURITY.md`](./SECURITY.md) | how to report a vulnerability privately |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | how a change reaches a default branch |
+| [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) | Contributor Covenant v2.1, org enforcement contact |
+
+## Adoption and onboarding contract
+
+The canonical, client-neutral contract for standing up a new repository — or aligning an existing one — is the **GitHub-native adoption kit** at [`First-AI-Movers/agent-toolkit` → `templates/github-native/`](https://github.com/First-AI-Movers/agent-toolkit/tree/main/templates/github-native).
+
+It is projection-only: it grants no authority, mutates no ruleset, and installs no GitHub App. Repository class and sensitivity are owned by the federation registry and mirrored one-way onto GitHub organization properties — GitHub is never written back into the registry.
+
+This repo intentionally stays minimal — it holds organization defaults and profile metadata only. It does not host code, workflows, or templates.
