@@ -1,6 +1,8 @@
 # Security Policy — First AI Movers (organization default)
 
-This is the **organization-wide default** security policy for **First AI Movers**. GitHub applies it to any `First-AI-Movers/*` repository that does **not** have its own `SECURITY.md`.
+This is the **organization-wide default** security policy for **First AI Movers**. GitHub applies it to any `First-AI-Movers/*` repository — public, internal, or private — that does **not** have its own `SECURITY.md`. The public requirement falls on the `.github` repository that serves the default, not on the repository receiving it.
+
+**This does not narrow how to report a vulnerability.** The contact below is the organization's reporting route for every First-AI-Movers repository, public or private.
 
 > **A repository's own `SECURITY.md` always overrides this default.** Active code/content repos (e.g. the application, the publishing engine, the article archive, the toolkit) maintain their own `SECURITY.md` — and, where applicable, their own incident-response runbook — with repo-specific scope and contacts. Use the repository's own policy if it has one; this default is the fallback for low-surface, static, profile, placeholder, and new repositories.
 
@@ -31,4 +33,4 @@ If you discover a security vulnerability — exposed credentials, an insecure co
 
 ## Scope & limits
 
-This default covers the organization's public surfaces and repositories that lack their own policy. It does **not** itself provide an incident-response runbook for every repo — active repositories are expected to adopt their own `SECURITY.md` and incident-response runbook. Reports about a specific product/repository are best sent with that repository named in the subject.
+This default is displayed on any First-AI-Movers repository — whatever its visibility — that lacks its own `SECURITY.md`, and the reporting route above applies to every one of them regardless. It does **not** itself provide an incident-response runbook for every repo — active repositories are expected to adopt their own `SECURITY.md` and incident-response runbook. Reports about a specific product/repository are best sent with that repository named in the subject.
