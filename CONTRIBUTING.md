@@ -30,7 +30,7 @@ BRANCH="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
 BRANCH_ENC="$(printf '%s' "$BRANCH" | jq -sRr @uri)"
 
 # Rulesets — organization-level and repository-level rules that apply to that branch
-gh api "repos/{owner}/{repo}/rules/branches/$BRANCH_ENC"
+gh api --paginate "repos/{owner}/{repo}/rules/branches/$BRANCH_ENC"
 
 # Classic branch protection — a separate, older mechanism the call above does NOT return
 gh api "repos/{owner}/{repo}/branches/$BRANCH_ENC/protection"
