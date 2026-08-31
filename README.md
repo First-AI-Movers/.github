@@ -13,7 +13,12 @@ For canonical company information, see:
 
 GitHub applies the files below to any **public** `First-AI-Movers/*` repository that does **not** ship its own copy. A repository's own file always overrides the default.
 
-**Private and internal repositories inherit nothing.** GitHub's default community-health mechanism covers public repositories only. Five of the eight First-AI-Movers repositories are private, so for most of the organization these files are a *reference* to adopt deliberately, not a default that arrives on its own.
+**Private and internal repositories inherit nothing.** GitHub's default community-health mechanism covers public repositories only. Most First-AI-Movers repositories are private, so for most of the organization these files are a *reference* to adopt deliberately, not a default that arrives on its own. To check the split for yourself:
+
+```bash
+gh api orgs/First-AI-Movers/repos --paginate --slurp \
+  | jq '[.[][] | .visibility] | group_by(.) | map({(.[0]): length}) | add'
+```
 
 | File | Applies when a repository has no own copy |
 |---|---|
