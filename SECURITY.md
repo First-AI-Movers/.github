@@ -33,4 +33,4 @@ If you discover a security vulnerability — exposed credentials, an insecure co
 
 ## Scope & limits
 
-This default covers the organization's public surfaces and repositories that lack their own policy. It does **not** itself provide an incident-response runbook for every repo — active repositories are expected to adopt their own `SECURITY.md` and incident-response runbook. Reports about a specific product/repository are best sent with that repository named in the subject.
+Two different things are easy to conflate here. **GitHub's automatic display** of this file reaches **public** repositories that lack their own `SECURITY.md`, and no others — a private or internal repository is not covered by that mechanism and must ship its own copy. **The reporting route above** is separate from that display and applies to every First-AI-Movers repository, public or private. This default does **not** itself provide an incident-response runbook for every repo — active repositories are expected to adopt their own `SECURITY.md` and incident-response runbook. Reports about a specific product/repository are best sent with that repository named in the subject.

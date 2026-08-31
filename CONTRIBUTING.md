@@ -19,11 +19,17 @@ The organization ruleset **Protect main branches** governs the default branch of
 Ruleset coverage is applied per repository and can lag behind a newly created one. Required status checks are configured **per repository**, not organization-wide, so they differ between repositories. To see exactly what applies where you are working, read **Settings → Rules**, or ask GitHub directly:
 
 ```bash
-# Rulesets — organization-level and repository-level rules that apply to the branch
-gh api repos/<owner>/<repo>/rules/branches/<default-branch>
+# Run these from a clone of the repository you are asking about.
+# `gh` substitutes {owner} and {repo} from the current directory's repository.
+# Ask for the DEFAULT branch explicitly: gh's {branch} placeholder expands to the
+# branch you are ON, which on a feature branch is the wrong question.
+BRANCH="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
+
+# Rulesets — organization-level and repository-level rules that apply to that branch
+gh api "repos/{owner}/{repo}/rules/branches/$BRANCH"
 
 # Classic branch protection — a separate, older mechanism the call above does NOT return
-gh api repos/<owner>/<repo>/branches/<default-branch>/protection
+gh api "repos/{owner}/{repo}/branches/$BRANCH/protection"
 ```
 
 **Both are needed: they are independent mechanisms and either can block your pull request.** The first command returns ruleset-derived rules only. A non-empty answer there is *not* the whole picture — a repository can return a healthy list of ruleset rules while its **required status checks** live in classic protection and never appear in that output at all. `First-AI-Movers/articles` was in exactly that state when this guide was last verified (2026-08-31): the rules endpoint returned ruleset rules while its merge-blocking status checks were visible only through the second command. That is a snapshot, not a standing fact — run both commands against the repository you are working in rather than trusting either this example or the first command alone. **A `404` from the second command is only meaningful if you could otherwise read the repository's settings.** GitHub returns `404` both when classic protection genuinely is absent *and* when the caller lacks repository **Administration: read** permission — it deliberately does not distinguish "not there" from "not yours to see", so an under-permissioned contributor can read a `404` as "unprotected" and miss merge-blocking rules. Treat `404` as absence only when the first command succeeded for the same repository and your token carries Administration read; otherwise treat it as **unknown** and ask a repository admin.
@@ -44,7 +50,7 @@ Do **not** report a suspected vulnerability through an issue, a pull request, or
 
 ## Adopting this contract in your own repository
 
-The canonical adoption and onboarding contract is the client-neutral **GitHub-native adoption kit** maintained at [`First-AI-Movers/agent-toolkit` → `templates/github-native/`](https://github.com/First-AI-Movers/agent-toolkit/tree/main/templates/github-native). **`agent-toolkit` is a private repository**, so that link resolves for organization members and returns `404` to everyone else — the kit exists, but it is not public. If you are outside the organization and need it, ask at `info@firstaimovers.com`.
+The canonical adoption and onboarding contract is the client-neutral **GitHub-native adoption kit** maintained at [`First-AI-Movers/agent-toolkit` → `templates/github-native/`](https://github.com/First-AI-Movers/agent-toolkit/tree/main/templates/github-native). **`agent-toolkit` is a private repository**, so that link resolves for anyone granted access to it — an organization member with access, or an outside collaborator — and returns `404` to everyone else, including organization members without access. Membership is not the test; repository permission is. The kit exists, but it is not public. If you are outside the organization and need it, ask at `info@firstaimovers.com`.
 
 It is **projection-only**: it grants no authority, mutates no ruleset, and installs no GitHub App. Use it when standing up a new repository or aligning an existing one — this default is not an onboarding guide, only the floor that applies until a repository defines its own.
 
