@@ -1,6 +1,6 @@
 # Contributing — First AI Movers (organization default)
 
-This is the **organization-wide default** contribution guide for **First AI Movers**. GitHub applies it to any **public** `First-AI-Movers/*` repository that does **not** have its own `CONTRIBUTING.md`. GitHub applies a default community-health file only to **public** repositories that do not have their own copy. A private or internal repository inherits nothing and must ship its own.
+This is the **organization-wide default** contribution guide for **First AI Movers**. GitHub applies it to any `First-AI-Movers/*` repository — public, internal, or private — that does **not** have its own `CONTRIBUTING.md`. The public requirement falls on the `.github` repository that serves the default, not on the repository receiving it.
 
 > **A repository's own `CONTRIBUTING.md` always overrides this default.** Where a repository ships its own guide, follow that one — this default is the fallback for low-surface, static, profile, placeholder, and new repositories.
 
@@ -25,11 +25,15 @@ Ruleset coverage is applied per repository and can lag behind a newly created on
 # branch you are ON, which on a feature branch is the wrong question.
 BRANCH="$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
 
+# URL-encode it: a branch name may legally contain '/' or '#', which would
+# otherwise change the endpoint path rather than name the branch.
+BRANCH_ENC="$(printf '%s' "$BRANCH" | jq -sRr @uri)"
+
 # Rulesets — organization-level and repository-level rules that apply to that branch
-gh api "repos/{owner}/{repo}/rules/branches/$BRANCH"
+gh api "repos/{owner}/{repo}/rules/branches/$BRANCH_ENC"
 
 # Classic branch protection — a separate, older mechanism the call above does NOT return
-gh api "repos/{owner}/{repo}/branches/$BRANCH/protection"
+gh api "repos/{owner}/{repo}/branches/$BRANCH_ENC/protection"
 ```
 
 **Both are needed: they are independent mechanisms and either can block your pull request.** The first command returns ruleset-derived rules only. A non-empty answer there is *not* the whole picture — a repository can return a healthy list of ruleset rules while its **required status checks** live in classic protection and never appear in that output at all. `First-AI-Movers/articles` was in exactly that state when this guide was last verified (2026-08-31): the rules endpoint returned ruleset rules while its merge-blocking status checks were visible only through the second command. That is a snapshot, not a standing fact — run both commands against the repository you are working in rather than trusting either this example or the first command alone. **A `404` from the second command is only meaningful if you could otherwise read the repository's settings.** GitHub returns `404` both when classic protection genuinely is absent *and* when the caller lacks repository **Administration: read** permission — it deliberately does not distinguish "not there" from "not yours to see", so an under-permissioned contributor can read a `404` as "unprotected" and miss merge-blocking rules. Treat `404` as absence only when the first command succeeded for the same repository and your token carries Administration read; otherwise treat it as **unknown** and ask a repository admin.
@@ -46,7 +50,7 @@ What those commands return together is what will actually be enforced against yo
 
 ## Security issues are not pull requests
 
-Do **not** report a suspected vulnerability through an issue, a pull request, or a discussion. Follow the organization [`SECURITY.md`](./SECURITY.md): email `info@firstaimovers.com` with the subject `SECURITY: <short title>`.
+Do **not** report a suspected vulnerability through an issue, a pull request, or a discussion. **If the repository has its own `SECURITY.md`, follow that one** — it carries the scope and contacts for that repository and overrides this default. Otherwise follow the organization [`SECURITY.md`](./SECURITY.md): email `info@firstaimovers.com` with the subject `SECURITY: <short title>`.
 
 ## Adopting this contract in your own repository
 

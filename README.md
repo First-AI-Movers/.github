@@ -11,13 +11,13 @@ For canonical company information, see:
 
 ## Organization-wide defaults
 
-GitHub applies the files below to any **public** `First-AI-Movers/*` repository that does **not** ship its own copy. A repository's own file always overrides the default.
+GitHub applies the files below to any `First-AI-Movers/*` repository — **public, internal, or private** — that does **not** ship its own copy. A repository's own file always overrides the default.
 
-**Private and internal repositories inherit nothing.** GitHub's default community-health mechanism covers public repositories only, so in any non-public repository these files are a *reference* to adopt deliberately, not a default that arrives on its own. Whether that describes one repository or most of them is an organization-owner fact this public README deliberately does not assert — see below.
+**The public requirement is on *this* repository, not on the destinations.** GitHub serves organization defaults only from a **public** `.github` repository — this one is public — and once that holds, the defaults reach every repository the organization owns, whatever its own visibility. A private repository with no `CODE_OF_CONDUCT.md` of its own is covered by the one here.
 
-There is deliberately no "check it yourself" command here. `GET /orgs/{org}/repos` returns only the repositories the **calling token** can see and returns `200` either way, so an outsider — or a member without access to every private repository — would get a smaller split, possibly zero private, with nothing in the response indicating the view was partial. Only an organization owner can obtain the true split, so publishing that query in a public README would invite exactly the wrong conclusion.
+There is deliberately no "check it yourself" command here. `GET /orgs/{org}/repos` returns only the repositories the **calling token** can see and returns `200` either way, so an outsider — or a member without access to every private repository — would get a smaller split, possibly zero private, with nothing in the response indicating the view was partial. Obtaining the true split requires visibility of **every** repository in the organization — a permission, not a role: an organization owner is guaranteed to have it, and so is anyone else granted access to them all. Publishing that query in a public README would invite exactly the wrong conclusion.
 
-| File | Applies to a **public** repository with no own copy |
+| File | Applies to any repository with no own copy |
 |---|---|
 | [`SECURITY.md`](./SECURITY.md) | how to report a vulnerability privately |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | how a change reaches a default branch |
