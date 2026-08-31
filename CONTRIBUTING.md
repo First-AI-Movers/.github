@@ -1,6 +1,6 @@
 # Contributing — First AI Movers (organization default)
 
-This is the **organization-wide default** contribution guide for **First AI Movers**. GitHub applies it to any `First-AI-Movers/*` repository that does **not** have its own `CONTRIBUTING.md`.
+This is the **organization-wide default** contribution guide for **First AI Movers**. GitHub applies it to any **public** `First-AI-Movers/*` repository that does **not** have its own `CONTRIBUTING.md`. GitHub applies a default community-health file only to **public** repositories that do not have their own copy. A private or internal repository inherits nothing and must ship its own.
 
 > **A repository's own `CONTRIBUTING.md` always overrides this default.** Where a repository ships its own guide, follow that one — this default is the fallback for low-surface, static, profile, placeholder, and new repositories.
 
@@ -19,10 +19,16 @@ The organization ruleset **Protect main branches** governs the default branch of
 Ruleset coverage is applied per repository and can lag behind a newly created one. Required status checks are configured **per repository**, not organization-wide, so they differ between repositories. To see exactly what applies where you are working, read **Settings → Rules**, or ask GitHub directly:
 
 ```bash
+# Rulesets — organization-level and repository-level rules that apply to the branch
 gh api repos/<owner>/<repo>/rules/branches/<default-branch>
+
+# Classic branch protection — a separate, older mechanism the call above does NOT return
+gh api repos/<owner>/<repo>/branches/<default-branch>/protection
 ```
 
-What that command returns is what will actually be enforced against your pull request. Treat it, not this file, as the authority on any given repository.
+**Both are needed: they are independent mechanisms and either can block your pull request.** The first command returns ruleset-derived rules only. A non-empty answer there is *not* the whole picture — a repository can return a healthy list of ruleset rules while its **required status checks** live in classic protection and never appear in that output at all. One public First-AI-Movers repository is in exactly that state today: the rules endpoint reports four ruleset rules, and its four merge-blocking status checks are visible only through the second command. A `404` from the second command means classic protection is absent, which is a read, not an absence of protection.
+
+What those commands return together is what will actually be enforced against your pull request. Treat them, not this file, as the authority on any given repository.
 
 ## Working agreement
 
@@ -38,7 +44,7 @@ Do **not** report a suspected vulnerability through an issue, a pull request, or
 
 ## Adopting this contract in your own repository
 
-The canonical adoption and onboarding contract is the client-neutral **GitHub-native adoption kit** maintained at [`First-AI-Movers/agent-toolkit` → `templates/github-native/`](https://github.com/First-AI-Movers/agent-toolkit/tree/main/templates/github-native).
+The canonical adoption and onboarding contract is the client-neutral **GitHub-native adoption kit** maintained at [`First-AI-Movers/agent-toolkit` → `templates/github-native/`](https://github.com/First-AI-Movers/agent-toolkit/tree/main/templates/github-native). **`agent-toolkit` is a private repository**, so that link resolves for organization members and returns `404` to everyone else — the kit exists, but it is not public. If you are outside the organization and need it, ask at `info@firstaimovers.com`.
 
 It is **projection-only**: it grants no authority, mutates no ruleset, and installs no GitHub App. Use it when standing up a new repository or aligning an existing one — this default is not an onboarding guide, only the floor that applies until a repository defines its own.
 

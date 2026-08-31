@@ -1,6 +1,8 @@
 # Security Policy — First AI Movers (organization default)
 
-This is the **organization-wide default** security policy for **First AI Movers**. GitHub applies it to any `First-AI-Movers/*` repository that does **not** have its own `SECURITY.md`.
+This is the **organization-wide default** security policy for **First AI Movers**. GitHub applies it to any **public** `First-AI-Movers/*` repository that does **not** have its own `SECURITY.md`. GitHub applies a default community-health file only to **public** repositories that do not have their own copy. A private or internal repository inherits nothing and must ship its own.
+
+**This does not narrow how to report a vulnerability.** The contact below is the organization's reporting route for every First-AI-Movers repository, public or private — what is public-only is GitHub's automatic *display* of this file on a repository that has no copy of its own.
 
 > **A repository's own `SECURITY.md` always overrides this default.** Active code/content repos (e.g. the application, the publishing engine, the article archive, the toolkit) maintain their own `SECURITY.md` — and, where applicable, their own incident-response runbook — with repo-specific scope and contacts. Use the repository's own policy if it has one; this default is the fallback for low-surface, static, profile, placeholder, and new repositories.
 

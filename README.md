@@ -11,7 +11,9 @@ For canonical company information, see:
 
 ## Organization-wide defaults
 
-GitHub applies the files below to any `First-AI-Movers/*` repository that does **not** ship its own copy. A repository's own file always overrides the default.
+GitHub applies the files below to any **public** `First-AI-Movers/*` repository that does **not** ship its own copy. A repository's own file always overrides the default.
+
+**Private and internal repositories inherit nothing.** GitHub's default community-health mechanism covers public repositories only. Five of the eight First-AI-Movers repositories are private, so for most of the organization these files are a *reference* to adopt deliberately, not a default that arrives on its own.
 
 | File | Applies when a repository has no own copy |
 |---|---|
@@ -21,7 +23,7 @@ GitHub applies the files below to any `First-AI-Movers/*` repository that does *
 
 ## Adoption and onboarding contract
 
-The canonical, client-neutral contract for standing up a new repository — or aligning an existing one — is the **GitHub-native adoption kit** at [`First-AI-Movers/agent-toolkit` → `templates/github-native/`](https://github.com/First-AI-Movers/agent-toolkit/tree/main/templates/github-native).
+The canonical, client-neutral contract for standing up a new repository — or aligning an existing one — is the **GitHub-native adoption kit** at [`First-AI-Movers/agent-toolkit` → `templates/github-native/`](https://github.com/First-AI-Movers/agent-toolkit/tree/main/templates/github-native). **`agent-toolkit` is private**, so this link resolves for organization members and returns `404` to everyone else. This repository is public; that one is not.
 
 It is projection-only: it grants no authority, mutates no ruleset, and installs no GitHub App. Repository class and sensitivity are owned by the federation registry and mirrored one-way onto GitHub organization properties — GitHub is never written back into the registry.
 

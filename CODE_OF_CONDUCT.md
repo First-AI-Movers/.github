@@ -1,6 +1,8 @@
 # Contributor Covenant Code of Conduct
 
-> This is the **organization-wide default** code of conduct for **First AI Movers**. GitHub applies it to any `First-AI-Movers/*` repository that does **not** have its own `CODE_OF_CONDUCT.md`, and a repository's own `CODE_OF_CONDUCT.md` always overrides this default.
+> This is the **organization-wide default** code of conduct for **First AI Movers**. GitHub applies it to any **public** `First-AI-Movers/*` repository that does **not** have its own `CODE_OF_CONDUCT.md`, and a repository's own `CODE_OF_CONDUCT.md` always overrides this default.
+>
+> **Private and internal repositories do not inherit it.** GitHub's default community-health mechanism covers public repositories only, so a non-public repository must ship its own copy — or adopt this one by reference in its `AGENTS.md` / repository canon, which is a repository-local act, not an inherited one. Most First-AI-Movers repositories are private, so this is the common case rather than the exception.
 
 ## Our Pledge
 
