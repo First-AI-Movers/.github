@@ -13,12 +13,9 @@ For canonical company information, see:
 
 GitHub applies the files below to any **public** `First-AI-Movers/*` repository that does **not** ship its own copy. A repository's own file always overrides the default.
 
-**Private and internal repositories inherit nothing.** GitHub's default community-health mechanism covers public repositories only. Most First-AI-Movers repositories are private, so for most of the organization these files are a *reference* to adopt deliberately, not a default that arrives on its own. To check the split for yourself:
+**Private and internal repositories inherit nothing.** GitHub's default community-health mechanism covers public repositories only. Most First-AI-Movers repositories are private, so for most of the organization these files are a *reference* to adopt deliberately, not a default that arrives on its own.
 
-```bash
-gh api orgs/First-AI-Movers/repos --paginate --slurp \
-  | jq '[.[][] | .visibility] | group_by(.) | map({(.[0]): length}) | add'
-```
+There is deliberately no "check it yourself" command here. `GET /orgs/{org}/repos` returns only the repositories the **calling token** can see and returns `200` either way, so an outsider — or a member without access to every private repository — would get a smaller split, possibly zero private, with nothing in the response indicating the view was partial. Only an organization owner can obtain the true split, so publishing that query in a public README would invite exactly the wrong conclusion.
 
 | File | Applies when a repository has no own copy |
 |---|---|
