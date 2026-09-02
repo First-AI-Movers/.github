@@ -243,10 +243,10 @@ class SmokeTestCase(unittest.TestCase):
     def test_python_repository_derives_compile_and_ruff(self) -> None:
         self.repo.write("pkg/app.py", "x = 1\n")
         sha = self.repo.commit()
-        plan = smoke.derive_plan(self.repo.root, sha, smoke.Tools())
-        self.assertEqual([c["name"] for c in plan["commands"]], ["compile", "ruff"])
+        plan = smoke.build_plan(self.repo.root, sha, smoke.Tools(), None)
+        self.assertEqual([c["name"] for c in plan["commands"]], ["floor:compile", "floor:ruff"])
         self.assertEqual([s["name"] for s in plan["setup"]], ["install-ruff"])
-        self.assertEqual(plan["languages"], ["python"])
+        self.assertEqual(plan["source"], "floor:python")
 
     def test_vendored_trees_do_not_make_a_repository_python(self) -> None:
         """A syntax floor that fails on a checked-in dependency reports on
@@ -254,31 +254,32 @@ class SmokeTestCase(unittest.TestCase):
         self.repo.write("node_modules/dep/setup.py", "this is not python\n")
         self.repo.write("vendor/other/mod.py", "also not python(\n")
         sha = self.repo.commit()
-        plan = smoke.derive_plan(self.repo.root, sha, smoke.Tools())
-        self.assertEqual(plan["languages"], [])
+        plan = smoke.build_plan(self.repo.root, sha, smoke.Tools(), None)
+        self.assertEqual(plan["commands"], [])
+        self.assertEqual(plan["source"], "none")
 
     def test_node_default_only_when_a_test_script_exists(self) -> None:
         self.repo.write("package.json", json.dumps({"name": "x", "scripts": {"build": "tsc"}}))
         sha = self.repo.commit()
-        self.assertEqual(smoke.derive_plan(self.repo.root, sha, smoke.Tools())["languages"], [])
+        self.assertEqual(smoke.build_plan(self.repo.root, sha, smoke.Tools(), None)["commands"], [])
 
         self.repo.write("package.json", json.dumps({"name": "x", "scripts": {"test": "jest"}}))
         sha = self.repo.commit()
-        plan = smoke.derive_plan(self.repo.root, sha, smoke.Tools())
-        self.assertEqual(plan["languages"], ["node"])
+        plan = smoke.build_plan(self.repo.root, sha, smoke.Tools(), None)
+        self.assertEqual(plan["source"], "derived:node")
         self.assertEqual([c["name"] for c in plan["commands"]], ["npm-test"])
         self.assertIn("npm install", plan["setup"][0]["run"])
 
     def test_node_lockfile_selects_npm_ci(self) -> None:
         self.repo.write("package.json", json.dumps({"scripts": {"test": "jest"}}))
         self.repo.write("package-lock.json", "{}")
-        plan = smoke.derive_plan(self.repo.root, self.repo.commit(), smoke.Tools())
+        plan = smoke.build_plan(self.repo.root, self.repo.commit(), smoke.Tools(), None)
         self.assertIn("npm ci", plan["setup"][0]["run"])
 
     def test_compile_failure_names_the_files(self) -> None:
         self.repo.write("broken.py", "def f(:\n")
         sha = self.repo.commit()
-        targets = smoke.derive_plan(self.repo.root, sha, smoke.Tools())["python_targets"]
+        targets = smoke.build_plan(self.repo.root, sha, smoke.Tools(), None)["python_targets"]
         check = smoke.check_compile(self.repo.root, smoke.Tools(), 120, targets)
         self.assertEqual(check["status"], "CODE_FAILURE")
         self.assertEqual(check["reason"], "COMPILE_FAILURE")
@@ -288,7 +289,7 @@ class SmokeTestCase(unittest.TestCase):
         self.repo.write("node_modules/dep/broken.py", "def f(:\n")
         self.repo.write("ok.py", "x = 1\n")
         sha = self.repo.commit()
-        targets = smoke.derive_plan(self.repo.root, sha, smoke.Tools())["python_targets"]
+        targets = smoke.build_plan(self.repo.root, sha, smoke.Tools(), None)["python_targets"]
         self.assertEqual(targets, ["ok.py"])
         check = smoke.check_compile(self.repo.root, smoke.Tools(), 120, targets)
         self.assertEqual(check["status"], "PASS", check["items"])
@@ -299,7 +300,7 @@ class SmokeTestCase(unittest.TestCase):
         self.repo.write("ok.py", "x = 1\n")
         sha = self.repo.commit()
         self.repo.write("generated_by_setup.py", "def f(:\n")   # untracked
-        targets = smoke.derive_plan(self.repo.root, sha, smoke.Tools())["python_targets"]
+        targets = smoke.build_plan(self.repo.root, sha, smoke.Tools(), None)["python_targets"]
         self.assertEqual(targets, ["ok.py"])
         check = smoke.check_compile(self.repo.root, smoke.Tools(), 120, targets)
         self.assertEqual(check["status"], "PASS", check["items"])
@@ -317,11 +318,12 @@ class SmokeTestCase(unittest.TestCase):
         })
         result = smoke.run_smoke(self.repo.root, sha, tools=tools)
         ids = [c["id"] for c in result["checks"]]
-        self.assertIn("compile", ids, ids)
-        self.assertEqual([c for c in result["checks"] if c["id"] == "compile"][0]["status"], "PASS")
+        self.assertIn(smoke.FLOOR_COMPILE_ID, ids, ids)
+        self.assertEqual([c for c in result["checks"]
+                          if c["id"] == smoke.FLOOR_COMPILE_ID][0]["status"], "PASS")
         self.assertEqual(result["outcome"], "INFRA_UNAVAILABLE")
-        self.assertEqual([c for c in result["checks"] if c["id"] == "ruff"][0]["reason"],
-                         "TOOL_MISSING:ruff")
+        self.assertEqual([c for c in result["checks"]
+                          if c["id"] == smoke.FLOOR_RUFF_ID][0]["reason"], "TOOL_MISSING:ruff")
 
     def test_a_declared_setup_failure_still_stops_everything(self) -> None:
         sha = self.declare({"schema_version": "1",
@@ -447,6 +449,136 @@ class SmokeTestCase(unittest.TestCase):
         self.assertFalse(os.path.exists(marker),
                          "a descendant of a timed-out command kept running")
 
+    # -- adoption defects -------------------------------------------------
+    def _set_env(self, **values):
+        saved = {k: os.environ.get(k) for k in values}
+        os.environ.update({k: v for k, v in values.items() if v is not None})
+        def restore():
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        self.addCleanup(restore)
+
+    def test_a_repository_module_may_import_a_sibling_by_name(self) -> None:
+        """The rail must not impose its own interpreter hardening on repository
+        commands. A module run as a script importing a sibling is ordinary in the
+        repository's own context, and PYTHONSAFEPATH turns it into a
+        ModuleNotFoundError that has nothing to do with the code."""
+        self.repo.write("pkg/split_integrity.py", "def check():\n    return 1\n")
+        self.repo.write("pkg/tool.py", "import split_integrity\nassert split_integrity.check() == 1\n")
+        sha = self.declare({"schema_version": "1",
+                            "commands": [{"name": "unit", "run": "python3 pkg/tool.py"}]})
+        # Exactly what the workflow sets job-wide today.
+        self._set_env(PYTHONSAFEPATH="1", PYTHONDONTWRITEBYTECODE="1")
+        # Assert on the declared command itself: the floor's ruff install needs a
+        # package index, which this box does not have, so the run as a whole is
+        # legitimately INFRA_UNAVAILABLE here. What defect 1 is about is whether
+        # the repository's own command can run at all.
+        report = self.run_smoke(sha)
+        unit = [c for c in report["checks"] if c["id"] == "unit"]
+        self.assertTrue(unit, [c["id"] for c in report["checks"]])
+        self.assertEqual(unit[0]["status"], "PASS", unit[0])
+        self.assertNotEqual(report["outcome"], "CODE_FAILURE")
+
+    def test_the_policy_interpreter_keeps_its_own_hardening(self) -> None:
+        """Dropping it from repository commands must not drop it from the
+        interpreter it exists to protect."""
+        self._set_env(PYTHONSAFEPATH="1", PYTHONDONTWRITEBYTECODE="1")
+        self.assertEqual(os.environ.get("PYTHONSAFEPATH"), "1")
+        leaked = sorted(set(smoke.command_environment()) & set(smoke.POLICY_INTERPRETER_ENV))
+        self.assertEqual(leaked, [], f"policy hardening leaked into repository commands: {leaked}")
+
+    def test_a_declaration_does_not_silently_remove_the_language_floor(self) -> None:
+        """An adopter should have to work to remove the floor, not to keep it."""
+        self.repo.write("app.py", "x = 1\n")
+        sha = self.declare({"schema_version": "1",
+                            "commands": [{"name": "unit", "run": "true"}]})
+        tools = FakeTools(present={"ruff"}, results={"rev-parse": (0, sha + "\n", "")})
+        report = smoke.run_smoke(self.repo.root, sha, tools=tools)
+        ids = [c["id"] for c in report["checks"]]
+        self.assertIn("floor:compile", ids, ids)
+        self.assertIn("floor:ruff", ids, ids)
+        self.assertIn("unit", ids, ids)
+
+    def test_a_best_effort_setup_failure_does_not_decide_the_outcome(self) -> None:
+        """The floor's ruff install is best effort. If it fails but ruff turns out
+        to be present anyway, recording the install as an INFRA check would make
+        the whole run INFRA_UNAVAILABLE on the strength of a step whose failure
+        nothing depended on."""
+        self.repo.write("app.py", "x = 1\n")
+        sha = self.declare({"schema_version": "1", "commands": [{"name": "unit", "run": "true"}]})
+        tools = FakeTools(present={"ruff"}, results={
+            "pip install": (1, "", "Could not resolve host: pypi.org"),
+            "rev-parse": (0, sha + "\n", ""),
+        })
+        report = smoke.run_smoke(self.repo.root, sha, tools=tools)
+        self.assertEqual(report["outcome"], "PASS",
+                         [(c["id"], c["status"]) for c in report["checks"]])
+        self.assertNotIn("setup:install-ruff", [c["id"] for c in report["checks"]])
+        self.assertIn("install-ruff", report["note"])
+        self.assertIn("best effort", report["note"])
+
+    def test_a_best_effort_failure_still_shows_through_the_dependent_check(self) -> None:
+        """Not recording the install must not hide a floor that could not run."""
+        self.repo.write("app.py", "x = 1\n")
+        sha = self.declare({"schema_version": "1", "commands": [{"name": "unit", "run": "true"}]})
+        tools = FakeTools(present=set(), results={
+            "pip install": (1, "", "network down"),
+            "rev-parse": (0, sha + "\n", ""),
+        })
+        report = smoke.run_smoke(self.repo.root, sha, tools=tools)
+        self.assertEqual(report["outcome"], "INFRA_UNAVAILABLE")
+        ruff = [c for c in report["checks"] if c["id"] == smoke.FLOOR_RUFF_ID][0]
+        self.assertEqual(ruff["reason"], "TOOL_MISSING:ruff")
+
+    def test_removing_the_floor_takes_an_explicit_opt_out(self) -> None:
+        self.repo.write("app.py", "x = 1\n")
+        sha = self.declare({"schema_version": "1", "language_floor": False,
+                            "commands": [{"name": "unit", "run": "true"}]})
+        tools = FakeTools(present={"ruff"}, results={"rev-parse": (0, sha + "\n", "")})
+        report = smoke.run_smoke(self.repo.root, sha, tools=tools)
+        ids = [c["id"] for c in report["checks"]]
+        self.assertNotIn(smoke.FLOOR_COMPILE_ID, ids)
+        self.assertNotIn(smoke.FLOOR_RUFF_ID, ids)
+        self.assertEqual(report["source"], "declared")
+
+    def test_a_non_boolean_language_floor_is_refused(self) -> None:
+        for value in ('"false"', "0", "null"):
+            with self.subTest(value=value):
+                self.setUp()
+                sha = self.declare('{"schema_version": "1", "language_floor": %s, '
+                                   '"commands": [{"name": "a", "run": "true"}]}' % value)
+                report = self.run_smoke(sha)
+                self.assertEqual(report["outcome"], "CODE_FAILURE")
+                self.assertEqual(report["checks"][-1]["reason"], "SMOKE_CONFIG_INVALID")
+
+    def test_a_declared_name_can_never_collide_with_a_floor_id(self) -> None:
+        """The floor ids carry a colon, which the declared-name grammar excludes,
+        so the two namespaces cannot overlap however a repository names things."""
+        for floor_id in (smoke.FLOOR_COMPILE_ID, smoke.FLOOR_RUFF_ID):
+            self.assertIn(":", floor_id)
+            with self.assertRaises(smoke.SmokeConfigError):
+                smoke.parse_smoke_config(json.dumps({
+                    "schema_version": "1",
+                    "commands": [{"name": floor_id, "run": "true"}],
+                }).encode())
+
+    def test_the_source_names_both_halves_of_the_plan(self) -> None:
+        self.repo.write("app.py", "x = 1\n")
+        sha = self.declare({"schema_version": "1", "commands": [{"name": "unit", "run": "true"}]})
+        tools = FakeTools(present={"ruff"}, results={"rev-parse": (0, sha + "\n", "")})
+        self.assertEqual(smoke.run_smoke(self.repo.root, sha, tools=tools)["source"],
+                         "floor:python+declared")
+
+    def test_a_non_python_repository_that_declares_gets_only_what_it_declared(self) -> None:
+        self.repo.write("main.go", "package main\n")
+        sha = self.declare({"schema_version": "1", "commands": [{"name": "go-test", "run": "true"}]})
+        report = self.run_smoke(sha)
+        self.assertEqual(report["source"], "declared")
+        self.assertEqual(report["outcome"], "PASS")
+
     def test_exit_codes_map_to_the_contract(self) -> None:
         self.assertEqual(smoke.EXIT, {"PASS": 0, "CODE_FAILURE": 1, "INFRA_UNAVAILABLE": 3})
         self.assertEqual(set(smoke.OUTCOMES), set(smoke.EXIT))
@@ -516,6 +648,39 @@ class AdoptionContractTestCase(unittest.TestCase):
         # caller small and the attribution rule in one place.
         self.assertEqual(self.workflow["concurrency"]["cancel-in-progress"], False)
         self.assertNotIn("concurrency", self.caller)
+
+    def test_interpreter_hardening_is_never_set_job_wide(self) -> None:
+        """Anything in a workflow- or job-level `env:` is inherited by every
+        repository-declared command. Interpreter hardening set there is an
+        adoption trap: it breaks ordinary repositories for a reason that has
+        nothing to do with their code."""
+        self.assertNotIn("env", self.workflow, "no workflow-level env")
+        for name, job in self.workflow["jobs"].items():
+            for key in (job.get("env") or {}):
+                self.assertFalse(key.startswith("PYTHON"),
+                                 f"{name} sets {key} job-wide")
+
+    def test_the_policy_steps_do_set_their_own_hardening(self) -> None:
+        """Dropping it job-wide must not drop it from the interpreter it protects."""
+        guarded = 0
+        for job in self.workflow["jobs"].values():
+            for step in job["steps"]:
+                run = step.get("run") or ""
+                if "policy/aeos/" in run:
+                    env = step.get("env") or {}
+                    self.assertEqual(env.get("PYTHONSAFEPATH"), "1", step.get("name"))
+                    self.assertEqual(env.get("PYTHONDONTWRITEBYTECODE"), "1", step.get("name"))
+                    guarded += 1
+        self.assertGreaterEqual(guarded, 5, "every policy invocation must be guarded")
+
+    def test_the_trusted_checkout_is_made_unwritable_where_repo_code_runs(self) -> None:
+        for name, job in self.workflow["jobs"].items():
+            runs_repo_code = any("main_smoke.py" in (s.get("run") or "") for s in job["steps"])
+            if not runs_repo_code:
+                continue
+            self.assertTrue(
+                any("chmod -R a-w policy" in (s.get("run") or "") for s in job["steps"]),
+                f"{name} runs repository commands without locking the trusted rail")
 
     def test_only_the_revert_job_references_a_secret(self) -> None:
         for name, job in self.workflow["jobs"].items():

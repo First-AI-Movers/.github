@@ -57,6 +57,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gitobject  # noqa: E402
 
+# Preload what CPython would otherwise import lazily on an unhandled exception.
+# Nothing should be imported after a repository command has run: the policy
+# interpreter's only writable `sys.path` entry is its own checkout, and although
+# the workflow makes that read-only before any command runs, an empty
+# lazy-import surface should not depend on a filesystem permission holding.
+for _preload in ("traceback", "linecache", "tokenize"):
+    __import__(_preload)
+del _preload
+
 SCHEMA_VERSION = "1"
 CHECK_CONTEXT = "aeos-main-smoke"
 OUTCOMES = ("PASS", "CODE_FAILURE", "INFRA_UNAVAILABLE")
@@ -123,7 +132,19 @@ RUNNER_FILE_COMMAND_ENV = (
     "GITHUB_OUTPUT", "GITHUB_ENV", "GITHUB_PATH", "GITHUB_STATE", "GITHUB_STEP_SUMMARY",
 )
 
-WITHHELD_ENV = frozenset(SENSITIVE_ENV + RUNNER_FILE_COMMAND_ENV)
+#: Hardening that belongs to the interpreter running THIS file, and to nothing
+#: else. `PYTHONSAFEPATH` exists to stop a candidate shadowing a stdlib name on
+#: the trusted interpreter's `sys.path`; it has no business constraining the
+#: repository's own commands, which run in the repository's own context where a
+#: module executed as a script importing a sibling by name is ordinary. Leaking
+#: it into them turns a healthy repository's first post-main run into a
+#: `ModuleNotFoundError` that says nothing about its code -- an adoption trap
+#: that is silent, organization-wide, and indistinguishable from a real defect.
+POLICY_INTERPRETER_ENV = (
+    "PYTHONSAFEPATH", "PYTHONDONTWRITEBYTECODE",
+)
+
+WITHHELD_ENV = frozenset(SENSITIVE_ENV + RUNNER_FILE_COMMAND_ENV + POLICY_INTERPRETER_ENV)
 
 
 def command_environment(environ=None) -> dict:
@@ -260,7 +281,19 @@ def parse_smoke_config(raw: bytes) -> dict:
             f"{SCHEMA_VERSIONS[0]!r}",
         )
 
-    plan = {"setup": [], "commands": [], "timeout_seconds": DEFAULT_TIMEOUT_SECONDS}
+    plan = {"setup": [], "commands": [], "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+            "language_floor": True}
+
+    floor = document.get("language_floor", True)
+    if not isinstance(floor, bool):
+        # Not truthiness: "false" and 0 are exactly the values someone reaches
+        # for when they mean False, and silently reading them as True would turn
+        # a request to remove the floor into a decision nobody made.
+        raise SmokeConfigError(
+            "SMOKE_CONFIG_INVALID",
+            f"{SMOKE_CONFIG_PATH}: language_floor must be true or false, not {floor!r}",
+        )
+    plan["language_floor"] = floor
     timeout = document.get("timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or not (
         MIN_TIMEOUT_SECONDS <= timeout <= MAX_TIMEOUT_SECONDS
@@ -341,22 +374,29 @@ def _is_excluded(path: str) -> bool:
     return re.search(EXCLUDE_RE, path) is not None
 
 
-def derive_plan(repo_root: Path, sha: str, tools: Tools) -> dict:
-    """Language defaults for a repository that declares nothing."""
-    paths = [p for p in tracked_paths(repo_root, sha) if not _is_excluded(p)]
-    setup: list[dict] = []
-    commands: list[dict] = []
-    languages: list[str] = []
+FLOOR_COMPILE_ID = "floor:compile"
+FLOOR_RUFF_ID = "floor:ruff"
 
-    python_targets = sorted(p for p in paths if p.endswith(".py"))
-    has_python = bool(python_targets) or any(
+
+def python_floor(paths) -> dict | None:
+    """The Python syntax and undefined-name floor, or ``None`` if not applicable.
+
+    Its check ids carry a ``floor:`` prefix, which a declared command name can
+    never collide with -- declared names are restricted to letters, digits, dot,
+    dash and underscore, so the colon is unavailable to them. The floor and a
+    repository's own commands therefore always coexist without either having to
+    know about the other.
+    """
+    targets = sorted(p for p in paths if p.endswith(".py"))
+    has_python = bool(targets) or any(
         os.path.basename(p) in PYTHON_MARKERS or PYTHON_MARKER_RE.match(os.path.basename(p))
         for p in paths
     )
-    if has_python:
-        languages.append("python")
-        commands.append({"name": "compile", "run": "__compile__", "builtin": True})
-        setup.append({
+    if not has_python:
+        return None
+    return {
+        "targets": targets,
+        "setup": [{
             "name": "install-ruff",
             "run": "python3 -m pip install --quiet --disable-pip-version-check ruff",
             # Best effort. compileall needs no installation, so a package-index
@@ -365,28 +405,75 @@ def derive_plan(repo_root: Path, sha: str, tools: Tools) -> dict:
             # the run is INFRA_UNAVAILABLE on that basis -- one reason, from the
             # check that actually could not run.
             "best_effort": True,
-        })
-        commands.append({"name": "ruff", "run": "__ruff__", "builtin": True})
+        }],
+        "commands": [
+            {"name": FLOOR_COMPILE_ID, "run": "__compile__", "builtin": True},
+            {"name": FLOOR_RUFF_ID, "run": "__ruff__", "builtin": True},
+        ],
+    }
 
-    if "package.json" in paths:
-        try:
-            raw = gitobject.read_file_at(repo_root, sha, "package.json", MAX_CONFIG_BYTES * 8)
-            manifest = json.loads(raw.decode("utf-8")) if raw else {}
-        except Exception:
-            manifest = {}
-        scripts = manifest.get("scripts") if isinstance(manifest, dict) else None
-        if isinstance(scripts, dict) and isinstance(scripts.get("test"), str) and scripts["test"].strip():
-            languages.append("node")
-            install = "npm ci" if "package-lock.json" in paths else "npm install"
-            setup.append({"name": "install-node-deps", "run": f"{install} --no-audit --no-fund"})
-            commands.append({"name": "npm-test", "run": "npm test"})
+
+def node_default(repo_root: Path, sha: str, paths) -> dict | None:
+    """`npm test`, and only where a `test` script actually exists."""
+    if "package.json" not in paths:
+        return None
+    try:
+        raw = gitobject.read_file_at(repo_root, sha, "package.json", MAX_CONFIG_BYTES * 8)
+        manifest = json.loads(raw.decode("utf-8")) if raw else {}
+    except Exception:
+        manifest = {}
+    scripts = manifest.get("scripts") if isinstance(manifest, dict) else None
+    if not (isinstance(scripts, dict) and isinstance(scripts.get("test"), str)
+            and scripts["test"].strip()):
+        return None
+    install = "npm ci" if "package-lock.json" in paths else "npm install"
+    return {
+        "setup": [{"name": "install-node-deps", "run": f"{install} --no-audit --no-fund"}],
+        "commands": [{"name": "npm-test", "run": "npm test"}],
+    }
+
+
+def build_plan(repo_root: Path, sha: str, tools: Tools, declared) -> dict:
+    """Combine the language floor with whatever the repository declares.
+
+    The floor runs *alongside* a declaration rather than being replaced by it.
+    A declaration used to substitute for the derived default entirely, so an
+    adopter who declared a smoke silently lost the syntax floor unless they
+    happened to re-declare it -- ending up with less checking than doing nothing,
+    while believing they had added a smoke. Removing the floor is now something
+    an adopter has to ask for, in a field named for what it does.
+    """
+    paths = [p for p in tracked_paths(repo_root, sha) if not _is_excluded(p)]
+    floor = python_floor(paths)
+    setup: list[dict] = []
+    commands: list[dict] = []
+    parts: list[str] = []
+
+    wants_floor = True if declared is None else declared.get("language_floor", True)
+    if floor and wants_floor:
+        setup += floor["setup"]
+        commands += floor["commands"]
+        parts.append("floor:python")
+
+    if declared is not None:
+        setup += declared["setup"]
+        commands += declared["commands"]
+        parts.append("declared")
+        timeout = declared["timeout_seconds"]
+    else:
+        node = node_default(repo_root, sha, paths)
+        if node:
+            setup += node["setup"]
+            commands += node["commands"]
+            parts.append("derived:node")
+        timeout = DEFAULT_TIMEOUT_SECONDS
 
     return {
         "setup": setup,
         "commands": commands,
-        "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
-        "languages": languages,
-        "python_targets": python_targets,
+        "timeout_seconds": timeout,
+        "python_targets": floor["targets"] if floor else [],
+        "source": "+".join(parts) if parts else "none",
     }
 
 
@@ -405,6 +492,9 @@ def _chunks(items, size=ARGV_CHUNK):
 
 
 def check_compile(repo_root: Path, tools: Tools, timeout: int, targets=None) -> dict:
+    # Note this runs through `_run`, so it inherits the repository command
+    # environment -- without PYTHONDONTWRITEBYTECODE, which would otherwise stop
+    # the one check whose entire job is to produce bytecode.
     """Parse every tracked Python file at the SHA.
 
     The file list is passed explicitly rather than walking the working tree: a
@@ -415,36 +505,36 @@ def check_compile(repo_root: Path, tools: Tools, timeout: int, targets=None) -> 
     """
     targets = list(targets or [])
     if not targets:
-        return _check("compile", "PASS", "PASS", "no tracked Python files")
+        return _check(FLOOR_COMPILE_ID, "PASS", "PASS", "no tracked Python files")
     items, failed = set(), False
     for batch in _chunks(targets):
         argv = [sys.executable or "python3", "-m", "compileall", "-q", *batch]
         proc, infra = _run(tools, argv, repo_root, timeout)
         if infra:
-            return _check("compile", "INFRA_UNAVAILABLE", infra, "compileall could not run")
+            return _check(FLOOR_COMPILE_ID, "INFRA_UNAVAILABLE", infra, "compileall could not run")
         if proc.returncode != 0:
             failed = True
             items |= {m.group("path") for m in _COMPILE_ERROR_RE.finditer(proc.stdout + proc.stderr)}
     if not failed:
-        return _check("compile", "PASS", "PASS", f"{len(targets)} tracked Python file(s) parse")
-    return _check("compile", "CODE_FAILURE", "COMPILE_FAILURE",
+        return _check(FLOOR_COMPILE_ID, "PASS", "PASS", f"{len(targets)} tracked Python file(s) parse")
+    return _check(FLOOR_COMPILE_ID, "CODE_FAILURE", "COMPILE_FAILURE",
                   f"{len(items) or 'one or more'} file(s) failed to compile", items=sorted(items))
 
 
 def check_ruff(repo_root: Path, tools: Tools, timeout: int, targets=None) -> dict:
     if not tools.which("ruff"):
-        return _check("ruff", "INFRA_UNAVAILABLE", "TOOL_MISSING:ruff",
+        return _check(FLOOR_RUFF_ID, "INFRA_UNAVAILABLE", "TOOL_MISSING:ruff",
                       "ruff is not installed on the runner")
     targets = list(targets or [])
     if not targets:
-        return _check("ruff", "PASS", "PASS", "no tracked Python files")
+        return _check(FLOOR_RUFF_ID, "PASS", "PASS", "no tracked Python files")
     items, failed = set(), False
     for batch in _chunks(targets):
         argv = ["ruff", "check", "--no-cache", "--force-exclude", "--select", RUFF_SELECT,
                 "--output-format", "concise", *batch]
         proc, infra = _run(tools, argv, repo_root, timeout)
         if infra:
-            return _check("ruff", "INFRA_UNAVAILABLE", infra, "ruff could not run")
+            return _check(FLOOR_RUFF_ID, "INFRA_UNAVAILABLE", infra, "ruff could not run")
         if proc.returncode == 1:
             failed = True
             items |= {f"{m.group('path')}:{m.group('line')}: {m.group('code')}"
@@ -452,11 +542,11 @@ def check_ruff(repo_root: Path, tools: Tools, timeout: int, targets=None) -> dic
         elif proc.returncode != 0:
             # Ruff exits 2 for its own usage/internal errors: the tool failing,
             # not the code failing.
-            return _check("ruff", "INFRA_UNAVAILABLE", f"RUFF_EXIT_{proc.returncode}",
+            return _check(FLOOR_RUFF_ID, "INFRA_UNAVAILABLE", f"RUFF_EXIT_{proc.returncode}",
                           "ruff exited with a non-findings status")
     if not failed:
-        return _check("ruff", "PASS", "PASS", f"no {RUFF_SELECT} findings")
-    return _check("ruff", "CODE_FAILURE", "LINT_FAILURE", f"{len(items)} finding(s)",
+        return _check(FLOOR_RUFF_ID, "PASS", "PASS", f"no {RUFF_SELECT} findings")
+    return _check(FLOOR_RUFF_ID, "CODE_FAILURE", "LINT_FAILURE", f"{len(items)} finding(s)",
                   items=sorted(items))
 
 
@@ -523,7 +613,7 @@ def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None) -> dict:
         return _finish(checks, expected_sha, started, source, "identity unproven; no checks were run")
 
     try:
-        plan = load_smoke_config(repo_root, expected_sha)
+        declared = load_smoke_config(repo_root, expected_sha)
     except SmokeConfigError as exc:
         status = "CODE_FAILURE" if exc.reason == "SMOKE_CONFIG_INVALID" else "INFRA_UNAVAILABLE"
         checks.append(_check("smoke-config", status, exc.reason, exc.detail))
@@ -532,15 +622,12 @@ def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None) -> dict:
         checks.append(_check("smoke-config", "INFRA_UNAVAILABLE", "GIT_ERROR", str(exc)))
         return _finish(checks, expected_sha, started, source, "")
 
-    if plan is not None:
-        source = "declared"
-    else:
-        try:
-            plan = derive_plan(repo_root, expected_sha, tools)
-        except gitobject.GitUnavailable as exc:
-            checks.append(_check("derive", "INFRA_UNAVAILABLE", "GIT_ERROR", str(exc)))
-            return _finish(checks, expected_sha, started, source, "")
-        source = "derived:" + "+".join(plan["languages"]) if plan["languages"] else "none"
+    try:
+        plan = build_plan(repo_root, expected_sha, tools, declared)
+    except gitobject.GitUnavailable as exc:
+        checks.append(_check("derive", "INFRA_UNAVAILABLE", "GIT_ERROR", str(exc)))
+        return _finish(checks, expected_sha, started, source, "")
+    source = plan["source"]
 
     if not plan["commands"]:
         checks.append(_check(
@@ -553,15 +640,29 @@ def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None) -> dict:
         return _finish(checks, expected_sha, started, source, note)
 
     timeout = plan["timeout_seconds"]
+    notes = [note] if note else []
     for entry in plan["setup"]:
         check = run_declared(repo_root, entry, tools, timeout, is_setup=True)
+        if check["status"] == "PASS":
+            checks.append(check)
+            continue
+        if entry.get("best_effort"):
+            # A best-effort step is provisioning that something else can report
+            # on. Recording its failure as a check would make the whole run
+            # INFRA_UNAVAILABLE even when the tool it was fetching turned out to
+            # be present already and the check ran clean -- an outcome decided by
+            # a step whose failure nothing depends on. The dependent check speaks
+            # for itself; this only leaves a note.
+            notes.append(f"{entry['name']}: {check['reason']} (best effort; "
+                         "the dependent check reports whether it mattered)")
+            continue
         checks.append(check)
-        if check["status"] != "PASS" and not entry.get("best_effort"):
-            # A repository declared this step as a prerequisite. Running the
-            # checks anyway would produce a defect report from a machine that is
-            # not in a fit state to report one.
-            return _finish(checks, expected_sha, started, source,
-                           "a declared setup step failed; the checks were not run")
+        # A repository declared this step as a prerequisite. Running the checks
+        # anyway would produce a defect report from a machine that is not in a
+        # fit state to report one.
+        return _finish(checks, expected_sha, started, source,
+                       "a declared setup step failed; the checks were not run")
+    note = " | ".join(notes)
 
     for entry in plan["commands"]:
         builtin = BUILTINS.get(entry.get("run")) if entry.get("builtin") else None

@@ -51,9 +51,10 @@ on:
 permissions:
   contents: read
 
-env:
-  PYTHONSAFEPATH: "1"           # never prepend a script's own directory to sys.path
-  PYTHONDONTWRITEBYTECODE: "1"  # keep imports from littering the trusted checkout
+# There is deliberately NO workflow-level `env:`. Anything set here is inherited
+# by every repository-declared command, and interpreter hardening that protects
+# the trusted policy code has no business constraining the repository's own. It
+# is set per step, on the steps that run policy code.
 
 concurrency:
   group: aeos-main-smoke-${{ github.sha }}
@@ -88,6 +89,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           show-progress: false
+      - name: Make the trusted rail unwritable
+        # Repository commands run as themselves and can write anywhere the job
+        # can, including into `policy/`. Dropping write permission closes the
+        # one route by which repository content could become policy code that a
+        # later lazy import executes.
+        run: chmod -R a-w policy
       - name: Honour a repository Python pin, if it has one
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -97,6 +104,12 @@ jobs:
         id: smoke
         env:
           AEOS_SHA: ${{ github.sha }}
+          # Hardening for the interpreter running the trusted policy code. Set
+          # here, not job-wide, so no repository command inherits it: a module
+          # run as a script importing a sibling by name is ordinary in the
+          # repository's own context, and PYTHONSAFEPATH breaks it.
+          PYTHONSAFEPATH: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -uo pipefail
           rc=0
@@ -177,6 +190,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           show-progress: false
+      - name: Make the trusted rail unwritable
+        # Repository commands run as themselves and can write anywhere the job
+        # can, including into `policy/`. Dropping write permission closes the
+        # one route by which repository content could become policy code that a
+        # later lazy import executes.
+        run: chmod -R a-w policy
       - name: Honour a repository Python pin, if it has one
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -185,6 +204,12 @@ jobs:
       - name: Rerun the identical smoke
         env:
           AEOS_SHA: ${{ github.sha }}
+          # Hardening for the interpreter running the trusted policy code. Set
+          # here, not job-wide, so no repository command inherits it: a module
+          # run as a script importing a sibling by name is ordinary in the
+          # repository's own context, and PYTHONSAFEPATH breaks it.
+          PYTHONSAFEPATH: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -uo pipefail
           python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_SHA" \
@@ -226,6 +251,12 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           show-progress: false
+      - name: Make the trusted rail unwritable
+        # Repository commands run as themselves and can write anywhere the job
+        # can, including into `policy/`. Dropping write permission closes the
+        # one route by which repository content could become policy code that a
+        # later lazy import executes.
+        run: chmod -R a-w policy
       - name: Honour a repository Python pin, if it has one
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -234,6 +265,12 @@ jobs:
       - name: Smoke the parent
         env:
           AEOS_BEFORE: ${{ github.event.before }}
+          # Hardening for the interpreter running the trusted policy code. Set
+          # here, not job-wide, so no repository command inherits it: a module
+          # run as a script importing a sibling by name is ordinary in the
+          # repository's own context, and PYTHONSAFEPATH breaks it.
+          PYTHONSAFEPATH: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -uo pipefail
           python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_BEFORE" \
@@ -285,6 +322,12 @@ jobs:
         env:
           AEOS_SHA: ${{ github.sha }}
           AEOS_BEFORE: ${{ github.event.before }}
+          # Hardening for the interpreter running the trusted policy code. Set
+          # here, not job-wide, so no repository command inherits it: a module
+          # run as a script importing a sibling by name is ordinary in the
+          # repository's own context, and PYTHONSAFEPATH breaks it.
+          PYTHONSAFEPATH: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -uo pipefail
           python3 policy/aeos/revert_controller.py decide --repo-root repo \
@@ -351,6 +394,12 @@ jobs:
           AEOS_REPO: ${{ github.repository }}
           AEOS_BASE_BRANCH: ${{ github.ref_name }}
           AEOS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Hardening for the interpreter running the trusted policy code. Set
+          # here, not job-wide, so no repository command inherits it: a module
+          # run as a script importing a sibling by name is ordinary in the
+          # repository's own context, and PYTHONSAFEPATH breaks it.
+          PYTHONSAFEPATH: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -uo pipefail
           rc=0
