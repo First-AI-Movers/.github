@@ -80,14 +80,27 @@ CONTROL_PLANE_PREFIXES = (".github/workflows/", ".github/actions/")
 """Changing what runs on merge is an operator-governed act in every repository."""
 
 GATE_CONFIG_PATH = ".github/aeos-gate.json"
-CONTROL_PLANE_PATHS = (GATE_CONFIG_PATH,)
+SMOKE_CONFIG_PATH = ".github/aeos-smoke.json"
+
+CONTROL_PLANE_PATHS = (GATE_CONFIG_PATH, SMOKE_CONFIG_PATH)
 """Exact paths that are control plane in their own right.
 
-The gate configuration carries the secret-shape exemptions, so a branch that
-could edit its own exemptions would be a self-serve bypass of the one check that
-exists to stop a credential reaching a public branch. Making the file
-operator-governed is the conjunct that turns the allowlist from a hole into a
-decision somebody accountable made."""
+Each of these files decides how a check behaves, so a branch able to edit its own
+copy would be deciding what it is judged by. Making them operator-governed is the
+conjunct that turns a configuration file from a hole into a decision somebody
+accountable made.
+
+- `aeos-gate.json` carries the secret-shape exemptions, so editing it is a
+  self-serve bypass of the one check that stops a credential reaching a public
+  branch.
+- `aeos-smoke.json` declares what the post-main rail runs against the merged
+  commit. Rewriting it to a command that always succeeds silently disarms that
+  rail for the repository -- no operator involved, and no signal that the check
+  still reporting green now measures nothing. A gate that protects its own
+  allowlist but not the smoke definition protects the wrong half.
+
+Both literals are defined once, above, because the enforced set and the
+documented set drift apart the moment either is spelled out twice."""
 
 GATE_CONFIG_SCHEMA_VERSIONS = ("1", 1)
 MAX_GATE_CONFIG_BYTES = 256 * 1024

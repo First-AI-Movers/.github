@@ -17,7 +17,7 @@ pull-request-body semantics, and no waiting.
 
 | Check | Reason code on failure |
 | --- | --- |
-| No changed path under `.github/workflows/**` or `.github/actions/**`, and none equal to `.github/aeos-gate.json` | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
+| No changed path in the control-plane set below | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | No high-confidence credential shape in changed text | `SECRET_SHAPE_DETECTED` |
 | Changed `.json` parses; changed `.yml`/`.yaml` parses | `STRUCTURED_DATA_UNPARSEABLE` |
 | Changed `.py` parses (parse only — never imported, never run) | `SYNTAX_ERROR` |
@@ -67,6 +67,28 @@ Candidate bytes are data, never code.
 - Event values reach the gate as environment variables, never interpolated into
   a shell body.
 
+## The control-plane set
+
+A changed path matching any of these is operator-governed and fails with
+`CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`. Matching is case-insensitive, and a
+deletion counts as a change.
+
+- `.github/workflows/**`
+- `.github/actions/**`
+- `.github/aeos-gate.json`
+- `.github/aeos-smoke.json`
+
+Each decides how a check behaves, so a branch able to edit its own copy would be
+choosing what it is judged by. `aeos-gate.json` carries the secret-shape
+exemptions; `aeos-smoke.json` declares what the post-main rail runs against the
+merged commit, and rewriting it to a command that always succeeds would silently
+disarm that rail — leaving a check that still reports green while measuring
+nothing.
+
+A test asserts this list matches the set the gate actually enforces, because the
+documented set and the enforced set drift apart the moment either is spelled out
+twice.
+
 ## Operator allowlist — `.github/aeos-gate.json` (optional)
 
 Some repositories deliberately commit credential-shaped literals as verified
@@ -91,10 +113,10 @@ its default branch:
   Git objects are content-addressed and `base_sha` comes from the event payload,
   so a branch cannot make that address resolve to bytes of its own choosing. The
   candidate working tree is never consulted.
-- **The file is itself control plane.** A pull request that adds or edits it
-  fails with `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`. An exemption is an
-  operator decision by construction — that conjunct is what makes the allowlist
-  a decision rather than a self-serve bypass.
+- **The file is itself control plane** (see the set above). A pull request that
+  adds or edits it fails with `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`. An
+  exemption is an operator decision by construction — that conjunct is what
+  makes the allowlist a decision rather than a self-serve bypass.
 - **Present but malformed fails closed** with `GATE_CONFIG_INVALID`. Invalid
   JSON, an unrecognised `schema_version`, or a `secret_shape_allowlist` that is
   not a list of non-empty strings will not silently degrade to "no exemptions".

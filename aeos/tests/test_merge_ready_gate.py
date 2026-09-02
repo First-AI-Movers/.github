@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -536,6 +538,32 @@ class GateTestCase(unittest.TestCase):
         self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
         self.assertEqual(report.findings[0].path, ".github/aeos-gate.json")
 
+    def test_candidate_editing_the_smoke_config_is_operator_governed(self) -> None:
+        """The post-main smoke definition decides what a merged commit is checked
+        against. A branch that can rewrite it can disarm its own rail."""
+        self.repo.write(".github/aeos-smoke.json",
+                        '{"schema_version": "1", "commands": [{"name": "noop", "run": "true"}]}\n')
+        report = self.run_gate(self.repo.commit("disarm the post-main rail"))
+        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
+        self.assertEqual(report.findings[0].path, ".github/aeos-smoke.json")
+
+    def test_editing_an_existing_smoke_config_is_also_operator_governed(self) -> None:
+        self.repo.write(".github/aeos-smoke.json",
+                        '{"schema_version": "1", "commands": [{"name": "unit", "run": "make test"}]}\n')
+        self.repo.base = self.repo.commit("seed a real smoke")
+        self.repo.write(".github/aeos-smoke.json",
+                        '{"schema_version": "1", "commands": [{"name": "unit", "run": "true"}]}\n')
+        report = self.run_gate(self.repo.commit("quietly neuter it"))
+        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
+
+    def test_deleting_the_smoke_config_is_also_operator_governed(self) -> None:
+        self.repo.write(".github/aeos-smoke.json",
+                        '{"schema_version": "1", "commands": [{"name": "unit", "run": "make test"}]}\n')
+        self.repo.base = self.repo.commit("seed a real smoke")
+        self.repo.remove(".github/aeos-smoke.json")
+        report = self.run_gate(self.repo.commit("delete it"))
+        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
+
     def test_config_is_read_from_the_base_not_from_the_working_tree(self) -> None:
         """The load-bearing conjunct: a branch cannot supply its own exemptions."""
         self.seed_gate_config({"schema_version": "1", "secret_shape_allowlist": ["safe/**"]})
@@ -707,6 +735,16 @@ class GateTestCase(unittest.TestCase):
         report = self.run_gate(self.repo.commit("ordinary"))
         self.assertFailsWith(report, gate.GATE_CONFIG_INVALID)
         self.assertIn("symlink", report.findings[0].detail)
+
+    def test_the_documented_control_plane_set_matches_the_enforced_one(self) -> None:
+        """A README that lists a different set from the code is how the two
+        halves of this rule drift apart."""
+        readme = pathlib.Path(__file__).resolve().parents[1] / "README.md"
+        text = readme.read_text(encoding="utf-8")
+        section = text.split("## The control-plane set", 1)[1].split("\n\n", 3)[2]
+        documented = set(re.findall(r"^- `([^`]+)`$", section, flags=re.MULTILINE))
+        enforced = {p + "**" for p in gate.CONTROL_PLANE_PREFIXES} | set(gate.CONTROL_PLANE_PATHS)
+        self.assertEqual(documented, enforced)
 
     def test_reason_codes_are_a_closed_vocabulary(self) -> None:
         self.assertEqual(len(set(gate.REASON_CODES)), len(gate.REASON_CODES))
