@@ -29,4 +29,18 @@ The canonical, client-neutral contract for standing up a new repository — or a
 
 It is projection-only: it grants no authority, mutates no ruleset, and installs no GitHub App. Repository class and sensitivity are owned by the federation registry and mirrored one-way onto GitHub organization properties — GitHub is never written back into the registry.
 
-This repo intentionally stays minimal — it holds organization defaults and profile metadata only. It does not host code, workflows, or templates.
+## Organization-owned merge rails
+
+This repository also holds the organization's own merge automation, because a
+required workflow can only be served from a repository every target can read —
+and only this one is public.
+
+| Rail | What it does |
+|---|---|
+| [`.github/workflows/aeos-main-smoke.yml`](./.github/workflows/aeos-main-smoke.yml) | post-merge smoke of the exact merged SHA, plus the deterministic circuit breaker and automatic revert — see [`aeos/main-smoke.md`](./aeos/main-smoke.md) for the ~12-line per-repository caller |
+
+Both rails are repository-agnostic: they depend on no file existing in the
+repository they run against, and a brand-new repository passes. Candidate code
+is treated as data by the merge gate and is never executed by it.
+
+Apart from these, the repo intentionally stays minimal — organization defaults and profile metadata.

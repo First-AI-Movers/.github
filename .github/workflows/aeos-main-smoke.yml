@@ -1,0 +1,374 @@
+# AEOS post-main rail — organization-owned, reusable.
+#
+#   merge → smoke the exact merged SHA → PASS | CODE_FAILURE | INFRA_UNAVAILABLE
+#
+# A repository consumes this with a ~12-line caller (see aeos/README.md). Every
+# decision lives here, on main, so the rail can be changed in one place rather
+# than in every repository that adopted it. A caller is unavoidable: GitHub has
+# no required-workflow equivalent for `push`.
+#
+# INFRA_UNAVAILABLE is never evidence about the code. A runner, network or
+# tooling outage produces machine-visible infrastructure health evidence and
+# stops; it never drives a revert and must never read as a bad commit.
+#
+# Circuit breaker (CODE_FAILURE only):
+#   1. `confirm` reruns the identical smoke on the identical SHA in a fresh runner;
+#   2. `parent-smoke` smokes the parent (`before`) so an inherited failure is not
+#      attributed to an innocent later squash;
+#   3. `auto-revert` reverts ONLY when both signatures are identical, the SHA is
+#      exactly one single-parent commit over `before`, the parent does not fail
+#      the same way, and no protected control-plane path changed. A revert
+#      conflict is a typed hard stop. The default branch is NEVER pushed
+#      directly; the revert is an ordinary pull request judged by the required
+#      gate.
+#
+# Attribution safety: concurrency is keyed per SHA and never cancels. An older
+# run cancelled because a newer merge landed would make that squash
+# unattributable, which is the one thing this rail cannot afford.
+#
+# Nothing here waits on anything.
+name: aeos-main-smoke
+
+on:
+  workflow_call:
+    secrets:
+      AEOS_REVERT_APP_PRIVATE_KEY:
+        # Declared so a caller can pass this one secret by name instead of
+        # `secrets: inherit`. That does not reduce the key's exposure -- an
+        # organization secret visible to a repository is readable by any workflow
+        # in it either way -- but it stops this reusable workflow receiving every
+        # unrelated secret the adopting repository happens to hold, and it makes
+        # the dependency visible in the caller rather than implicit.
+        #
+        # Optional on purpose: without it the smoke still runs and still reports.
+        # Only the automatic revert is unavailable, and it says so with a typed
+        # AUTOREVERT_AUTH_UNAVAILABLE rather than failing quietly.
+        required: false
+        description: >-
+          Private key of the organization's revert GitHub App. Omit to run the
+          smoke without the automatic revert rail.
+
+permissions:
+  contents: read
+
+env:
+  PYTHONSAFEPATH: "1"           # never prepend a script's own directory to sys.path
+  PYTHONDONTWRITEBYTECODE: "1"  # keep imports from littering the trusted checkout
+
+concurrency:
+  group: aeos-main-smoke-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  main-smoke:
+    name: main-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      outcome: ${{ steps.smoke.outputs.outcome }}
+      signature: ${{ steps.smoke.outputs.signature }}
+      source: ${{ steps.smoke.outputs.source }}
+    steps:
+      - name: Check out the exact SHA under test
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          path: repo
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+      - name: Check out the trusted rail
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: First-AI-Movers/.github
+          ref: main
+          path: policy
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+      - name: Honour a repository Python pin, if it has one
+        if: hashFiles('repo/.python-version') != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version-file: repo/.python-version
+      - name: Smoke
+        id: smoke
+        env:
+          AEOS_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          rc=0
+          python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_SHA" \
+            --out smoke.json --summary-file "$GITHUB_STEP_SUMMARY" || rc=$?
+
+          # 0 PASS | 1 CODE_FAILURE | 3 INFRA_UNAVAILABLE. The outcome published
+          # to the breaker is derived from the EXIT CODE, which repository
+          # content cannot reach, and the file is then required to agree with it.
+          # The file is written inside a workspace the smoke's own commands can
+          # also write to, so it is corroborating evidence, never the source of
+          # the verdict.
+          case "$rc" in
+            0) expected=PASS ;;
+            1) expected=CODE_FAILURE ;;
+            *) expected=INFRA_UNAVAILABLE ;;
+          esac
+          if [ ! -s smoke.json ]; then
+            echo "AEOS_MAIN_SMOKE: no outcome file; reporting INFRA_UNAVAILABLE" \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          recorded="$(python3 -c "import json;print(json.load(open('smoke.json'))['outcome'])")"
+          if [ "$recorded" != "$expected" ]; then
+            {
+              echo "AEOS_MAIN_SMOKE: EVIDENCE_MISMATCH"
+              echo "the recorded outcome ($recorded) disagrees with the gate's exit code"
+              echo "($expected). The outcome file was altered after it was written; no"
+              echo "code claim is made and the breaker is not engaged."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          {
+            echo "outcome=$expected"
+            python3 - <<'PY'
+          import json
+          d = json.load(open("smoke.json"))
+          print(f"signature={d.get('signature') or ''}")
+          print(f"source={d.get('source') or ''}")
+          PY
+          } >> "$GITHUB_OUTPUT"
+          exit "$rc"
+      - name: Upload the outcome (per SHA)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aeos-main-smoke-${{ github.sha }}-first
+          path: smoke.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  confirm:
+    # Rerun ONCE against the identical SHA in a fresh runner. Only a CODE_FAILURE
+    # is ever confirmed; PASS and INFRA_UNAVAILABLE never reach here.
+    name: main-smoke-confirm
+    needs: main-smoke
+    if: always() && github.event_name == 'push' && needs.main-smoke.outputs.outcome == 'CODE_FAILURE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the identical SHA
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          path: repo
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+      - name: Check out the trusted rail
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: First-AI-Movers/.github
+          ref: main
+          path: policy
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+      - name: Honour a repository Python pin, if it has one
+        if: hashFiles('repo/.python-version') != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version-file: repo/.python-version
+      - name: Rerun the identical smoke
+        env:
+          AEOS_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_SHA" \
+            --out smoke-confirm.json --summary-file "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload the confirmation (per SHA)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aeos-main-smoke-${{ github.sha }}-confirm
+          path: smoke-confirm.json
+          if-no-files-found: error
+          retention-days: 30
+
+  parent-smoke:
+    # Origin check. If the parent fails the same way, this squash inherited the
+    # failure and must not be reverted for it.
+    name: main-smoke-parent
+    needs: main-smoke
+    if: always() && github.event_name == 'push' && needs.main-smoke.outputs.outcome == 'CODE_FAILURE'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the parent commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.before }}
+          path: repo
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+      - name: Check out the trusted rail
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: First-AI-Movers/.github
+          ref: main
+          path: policy
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+      - name: Honour a repository Python pin, if it has one
+        if: hashFiles('repo/.python-version') != ''
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version-file: repo/.python-version
+      - name: Smoke the parent
+        env:
+          AEOS_BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_BEFORE" \
+            --out smoke-parent.json --summary-file "$GITHUB_STEP_SUMMARY" || true
+      - name: Upload the parent outcome (per SHA)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aeos-main-smoke-${{ github.sha }}-parent
+          path: smoke-parent.json
+          if-no-files-found: error
+          retention-days: 30
+
+  auto-revert:
+    # Deterministic circuit breaker. Only the trusted rail executes here: the
+    # repository's own code is never run in the job that holds the token.
+    name: main-smoke-auto-revert
+    needs: [main-smoke, confirm, parent-smoke]
+    if: always() && github.event_name == 'push' && needs.main-smoke.outputs.outcome == 'CODE_FAILURE' && needs.confirm.result == 'success' && needs.parent-smoke.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read   # the App installation token carries the write scopes, not GITHUB_TOKEN
+    steps:
+      - name: Check out the repository under judgment (full history)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+          show-progress: false
+      - name: Check out the trusted rail
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: First-AI-Movers/.github
+          ref: main
+          path: policy
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+      - name: Download this SHA's smoke evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: aeos-main-smoke-${{ github.sha }}-*
+          path: evidence
+      - name: Decide (typed; no model)
+        id: decide
+        env:
+          AEOS_SHA: ${{ github.sha }}
+          AEOS_BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          python3 policy/aeos/revert_controller.py decide --repo-root repo \
+            --sha "$AEOS_SHA" --before "$AEOS_BEFORE" \
+            --first  "evidence/aeos-main-smoke-${AEOS_SHA}-first/smoke.json" \
+            --second "evidence/aeos-main-smoke-${AEOS_SHA}-confirm/smoke-confirm.json" \
+            --parent "evidence/aeos-main-smoke-${AEOS_SHA}-parent/smoke-parent.json" \
+            --out decision.json | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 -c "import json;print('decision='+json.load(open('decision.json'))['decision'])" >> "$GITHUB_OUTPUT"
+      - name: Require the operator-provisioned App credentials (typed, fail-closed)
+        if: steps.decide.outputs.decision == 'REVERT'
+        env:
+          HAS_APP_ID: ${{ vars.AEOS_REVERT_APP_ID != '' }}
+          HAS_APP_KEY: ${{ secrets.AEOS_REVERT_APP_PRIVATE_KEY != '' }}
+        run: |
+          set -uo pipefail
+          if [ "$HAS_APP_ID" != "true" ] || [ "$HAS_APP_KEY" != "true" ]; then
+            {
+              echo "AEOS_AUTOREVERT_RESULT: AUTOREVERT_AUTH_UNAVAILABLE"
+              echo "vars.AEOS_REVERT_APP_ID / secrets.AEOS_REVERT_APP_PRIVATE_KEY are not visible to"
+              echo "this repository. The confirmed revert decision is recorded in decision.json and"
+              echo "was NOT executed. There is deliberately no fallback to GITHUB_TOKEN: a pull"
+              echo "request opened with it fires no workflow, so the required gate could never"
+              echo "report on the revert."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 5
+          fi
+      - name: Mint a short-lived App installation token (contents + pull-requests write only)
+        id: app-token
+        if: steps.decide.outputs.decision == 'REVERT'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.AEOS_REVERT_APP_ID }}
+          private-key: ${{ secrets.AEOS_REVERT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Resolve the App bot identity (an unattributed commit never auto-merges)
+        id: identity
+        if: steps.decide.outputs.decision == 'REVERT'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -uo pipefail
+          gh auth setup-git
+          bot_id="$(gh api "users/${APP_SLUG}%5Bbot%5D" --jq .id 2>/dev/null || true)"
+          if [ -z "${APP_SLUG:-}" ] || ! printf '%s' "$bot_id" | grep -Eq '^[0-9]+$'; then
+            {
+              echo "AEOS_AUTOREVERT_RESULT: AUTOREVERT_IDENTITY_UNAVAILABLE"
+              echo "The App bot user id could not be resolved. An unattributed revert commit trips"
+              echo "the organization ruleset's extra-approval rule, so the armed auto-merge would"
+              echo "never fire. The confirmed decision is recorded and was NOT executed."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 5
+          fi
+          echo "git_name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "git_email=${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+      - name: Execute the revert through the normal PR path (never the default branch directly)
+        if: steps.decide.outputs.decision == 'REVERT'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          AEOS_REVERT_GIT_NAME: ${{ steps.identity.outputs.git_name }}
+          AEOS_REVERT_GIT_EMAIL: ${{ steps.identity.outputs.git_email }}
+          AEOS_REPO: ${{ github.repository }}
+          AEOS_BASE_BRANCH: ${{ github.ref_name }}
+          AEOS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          rc=0
+          python3 policy/aeos/revert_controller.py execute --repo-root repo \
+            --repo "$AEOS_REPO" --decision decision.json --base-branch "$AEOS_BASE_BRANCH" \
+            --run-url "$AEOS_RUN_URL" --execute --out revert-result.json \
+            | tee -a "$GITHUB_STEP_SUMMARY" || rc=$?
+          # 3 REVERT_CONFLICT | 4 outward write failed | 5 credentials/identity.
+          # All are red, typed, and stop here.
+          exit "$rc"
+      - name: Upload the decision and result (per SHA)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aeos-main-smoke-${{ github.sha }}-revert
+          path: |
+            decision.json
+            revert-result.json
+          if-no-files-found: warn
+          retention-days: 90
