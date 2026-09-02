@@ -1,0 +1,121 @@
+# AEOS organization merge-ready gate.
+#
+# This is the organization-owned required workflow for the AUTONOMOUS-MAIN
+# lifecycle. It is repository-agnostic: it depends on no file existing in the
+# repository it runs against, and a brand-new repository passes.
+#
+# Trust model: the candidate (the bytes a pull request proposes) is DATA. Only
+# the policy checkout executes. Candidate tests, candidate scripts, candidate
+# configuration and candidate workflows are never run.
+#
+# The check context this publishes is the job name `aeos-merge-ready`. Renaming
+# the job silently detaches every ruleset and auto-merge that reads that name.
+name: aeos-merge-ready
+
+# Only events that carry a real two-endpoint commit range. `workflow_dispatch`
+# is deliberately absent: a dispatched run has no range to measure, and it would
+# publish a green under this job's name -- the exact context rulesets and
+# auto-merge read -- on whatever branch tip it was run against.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  merge_group:
+
+# No `concurrency` block, deliberately: a cancelled required run leaves a head
+# commit with no verdict, which is indistinguishable from a head that was never
+# evaluated.
+
+permissions:
+  contents: read
+
+jobs:
+  aeos-merge-ready:
+    name: aeos-merge-ready
+    runs-on: ubuntu-latest
+    # A hang bound, not the budget. The budget is enforced twice inside the
+    # gate step: an external `timeout` and the gate's own self-measurement.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out candidate (untrusted data)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out trusted policy
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: First-AI-Movers/.github
+          ref: main
+          path: policy
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Gate
+        env:
+          # Every value the gate reads arrives as an environment variable.
+          # Nothing from the event is interpolated into the shell body, so no
+          # candidate-controlled string can become a command.
+          AEOS_REPOSITORY: ${{ github.repository }}
+          AEOS_EVENT_NAME: ${{ github.event_name }}
+          AEOS_BASE_SHA: >-
+            ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha
+            || github.event_name == 'pull_request' && github.event.pull_request.base.sha
+            || github.sha }}
+          AEOS_HEAD_SHA: >-
+            ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha
+            || github.event_name == 'pull_request' && github.event.pull_request.head.sha
+            || github.sha }}
+          # The gate's own hard budget sits below the external ceiling, so it
+          # is the layer that normally fires and the external timer is the
+          # backstop for a body that never reaches its own measurement.
+          AEOS_GATE_BUDGET_SECONDS: "45"
+          AEOS_CEILING_SECONDS: "60"
+          AEOS_SOFT_BUDGET_SECONDS: "10"
+        run: |
+          set -uo pipefail
+          python3 -VV
+          set +e
+          timeout --signal=TERM --kill-after=10s "${AEOS_CEILING_SECONDS}s" \
+            python3 policy/aeos/merge_ready_gate.py \
+              --candidate-dir candidate \
+              --hard-budget-seconds "${AEOS_GATE_BUDGET_SECONDS}" \
+              --soft-budget-seconds "${AEOS_SOFT_BUDGET_SECONDS}"
+          rc=$?
+          set -e
+          # 0 is PASS and 1 is a verdict the gate already reported with a typed
+          # reason. Anything else means the gate never reached its own reporting,
+          # so map it onto the same closed vocabulary rather than letting a bare
+          # non-zero exit stand in for a reason.
+          case "$rc" in
+            0|1)
+              exit "$rc"
+              ;;
+            124|137)
+              code="BUDGET_EXCEEDED"
+              detail="the gate body exceeded the external ${AEOS_CEILING_SECONDS}s ceiling"
+              ;;
+            *)
+              code="EVIDENCE_UNREADABLE"
+              detail="the gate terminated abnormally (exit ${rc})"
+              ;;
+          esac
+          line="AEOS_MERGE_READY_RESULT: FAIL ${code}"
+          echo "$line"
+          echo "$detail"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+              echo "## aeos-merge-ready"
+              echo ""
+              echo "$line"
+              echo ""
+              echo "- $detail"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 1
