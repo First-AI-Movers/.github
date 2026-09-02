@@ -91,19 +91,31 @@ reported a defect — a degraded measurement is not a confirmation.
 
 ## What gets smoked
 
-Derived from the merged SHA, in order:
+Two things, and they **add up** rather than replacing one another:
 
-1. **`.github/aeos-smoke.json`** — the repository names its own commands.
-2. **Language defaults** — for Python, a syntax and undefined-name floor
-   (`compileall`, plus `ruff --select E9,F63,F7,F82`); for Node, `npm test`, and
-   only where a `test` script actually exists.
-3. **Neither** — `NO_SMOKE_DEFINED`, reported as a **PASS with an explicit
-   note** and a `source` job output of `none`.
+1. **The language floor**, derived from the merged SHA. Where the repository has
+   Python, that is `compileall` plus `ruff --select E9,F63,F7,F82` — the subset
+   that says the code cannot work, not that it is styled differently. Its checks
+   are named `floor:compile` and `floor:ruff`.
+2. **`.github/aeos-smoke.json`**, where the repository names its own commands.
 
-Be precise about what the third case means. It is not "this repository has no
-tests"; it is **"this rail could not derive a smoke"**. Derivation covers Python
-and Node-with-a-`test`-script only, so a Go, Rust, Java, Ruby or Terraform
-repository with a full suite lands here and is permanently green until it
+A declaration used to *replace* the floor, so an adopter who declared a smoke
+silently lost it unless they happened to re-declare it themselves — ending up
+with less checking than doing nothing, while believing they had added a smoke.
+The floor now runs alongside a declaration. Removing it takes an explicit
+`"language_floor": false`, in a field named for what it does.
+
+Where the repository declares nothing, the floor is joined by the derived Node
+default: `npm test`, and only where a `test` script actually exists. That one is
+a test runner rather than a floor, so a declaration does replace it — if you are
+naming your own commands, you are already saying how your tests run.
+
+If neither applies, the outcome is **`NO_SMOKE_DEFINED`** — a PASS with an
+explicit note and a `source` job output of `none`.
+
+Be precise about what that last case means. It is not "this repository has no
+tests"; it is **"this rail found nothing it could run"**. The floor covers Python
+only, so a Go, Rust, Java or Terraform repository is permanently green until it
 declares a smoke. And a declared `{"name": "noop", "run": "true"}` is a
 legitimate, permanent, un-flaggable green too.
 
@@ -112,9 +124,21 @@ smoke gets reverted when that smoke breaks"* — never *"a bad commit gets
 reverted"*. A green here is a statement about what ran, not about the code.
 
 Vendored and generated trees (`node_modules`, `vendor`, `.venv`, `build`, …) are
-excluded from the defaults. A syntax floor that fails on a checked-in dependency
-is reporting on somebody else's code — and on this rail, that would drive a
-revert.
+excluded from the floor, which is also scoped to the files tracked at the SHA.
+A syntax floor that fails on a checked-in dependency, or on something a `setup`
+step generated into the checkout, is reporting on code the commit did not
+contain — and on this rail, that would drive a revert.
+
+### Your commands run in your repository's context
+
+The rail does not impose its own interpreter settings on what it runs. In
+particular `PYTHONSAFEPATH`, which protects the trusted policy interpreter from
+a repository shadowing a stdlib name, is **not** visible to repository commands:
+a module executed as a script importing a sibling by name is ordinary in a
+repository's own context, and inheriting that setting turned healthy
+repositories' first post-main run into a `ModuleNotFoundError` that said nothing
+about their code. Nothing is set job-wide; the hardening is applied to the policy
+steps only. You should not need `env -u` anything.
 
 ### `.github/aeos-smoke.json`
 
@@ -122,6 +146,7 @@ revert.
 {
   "schema_version": "1",
   "timeout_seconds": 600,
+  "language_floor": true,
   "setup":    [{ "name": "deps", "run": "pip install -r requirements.txt" }],
   "commands": [{ "name": "unit", "run": "python3 -m pytest -q tests/smoke" }]
 }
@@ -137,11 +162,21 @@ revert.
   without anyone deciding to.
 - A **`setup`** failure is `INFRA_UNAVAILABLE` — provisioning is not the subject
   under test. A **`commands`** failure is `CODE_FAILURE`.
-- The file is **control plane** to the breaker: a commit that touched it is
-  never auto-reverted, because a rail that can revert its own configuration can
-  disable itself. Adding it to the merge gate's control-plane set, so that
-  changing it also needs an operator on the way in, is a one-line follow-up
-  tracked against the gate.
+- The floor's own `ruff` install is *best effort*: if it fails it leaves a note
+  rather than an outcome. `compileall` needs no install, and if `ruff` turns out
+  to be on the runner anyway the floor simply runs. Only `floor:ruff` reporting
+  `TOOL_MISSING:ruff` makes the run `INFRA_UNAVAILABLE` — the check that could
+  not run says so itself, rather than a provisioning step deciding it on the
+  check's behalf.
+- `"language_floor": false` removes the derived floor. It must be a literal
+  `true` or `false` — `"false"` and `0` are refused rather than read as truthy,
+  because those are exactly the values someone reaches for when they mean the
+  opposite. Say plainly what it gives up: the repository keeps only the commands
+  it declares, so a syntax error or an undefined name in a file no declared
+  command imports will not be caught here.
+- The file is **control plane**, on both sides. The merge gate refuses a pull
+  request that changes it, and the breaker never auto-reverts a commit that
+  touched it — a rail that can revert its own configuration can disable itself.
 
 ## The circuit breaker
 
