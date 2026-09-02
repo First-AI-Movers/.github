@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import tempfile
@@ -456,6 +457,70 @@ class SmokeTestCase(unittest.TestCase):
         text = smoke.render(result)
         self.assertIn("CODE_FAILURE", text)
         self.assertIn(result["signature"], text)
+
+
+class AdoptionContractTestCase(unittest.TestCase):
+    """The documented caller and the reusable workflow are one contract.
+
+    A caller may only pass a secret the reusable declares in
+    `on.workflow_call.secrets`, and that mismatch fails at run time in the
+    adopting repository rather than here -- which is exactly the kind of break
+    nobody sees until a revert is needed.
+    """
+
+    ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+    def setUp(self) -> None:
+        try:
+            import yaml
+        except ImportError:  # pragma: no cover
+            self.skipTest("PyYAML is unavailable")
+        self.yaml = yaml
+        self.workflow = yaml.safe_load(
+            (self.ROOT / ".github/workflows/aeos-main-smoke.yml").read_text(encoding="utf-8"))
+        doc = (self.ROOT / "aeos/main-smoke.md").read_text(encoding="utf-8")
+        self.snippet = doc.split("```yaml", 1)[1].split("```", 1)[0]
+        self.caller = yaml.safe_load(self.snippet)
+        self.doc = doc
+
+    def _on(self):
+        return self.workflow[True] if True in self.workflow else self.workflow["on"]
+
+    def _declared_secrets(self) -> dict:
+        call = self._on().get("workflow_call") or {}
+        return call.get("secrets") or {}
+
+    def test_the_documented_caller_passes_only_declared_secrets(self) -> None:
+        declared = set(self._declared_secrets())
+        passed = set(self.caller["jobs"]["smoke"].get("secrets") or {})
+        self.assertTrue(passed, "the caller should name the secret it needs")
+        self.assertLessEqual(passed, declared,
+                             "a caller may only pass a secret the reusable declares")
+
+    def test_the_documented_caller_does_not_inherit_every_secret(self) -> None:
+        # The snippet, not the prose around it, which explains why.
+        self.assertNotIn("inherit", self.snippet)
+
+    def test_the_revert_secret_is_optional_so_the_smoke_still_runs_without_it(self) -> None:
+        declared = self._declared_secrets()
+        self.assertIn("AEOS_REVERT_APP_PRIVATE_KEY", declared)
+        self.assertFalse(declared["AEOS_REVERT_APP_PRIVATE_KEY"].get("required", False))
+
+    def test_the_documented_caller_targets_this_reusable_workflow(self) -> None:
+        uses = self.caller["jobs"]["smoke"]["uses"]
+        self.assertTrue(uses.endswith(".github/workflows/aeos-main-smoke.yml@main"), uses)
+
+    def test_the_reusable_is_callable_and_holds_the_decisions(self) -> None:
+        self.assertEqual(list(self._on()), ["workflow_call"])
+        # Concurrency must live here, not in the caller: that is what keeps the
+        # caller small and the attribution rule in one place.
+        self.assertEqual(self.workflow["concurrency"]["cancel-in-progress"], False)
+        self.assertNotIn("concurrency", self.caller)
+
+    def test_only_the_revert_job_references_a_secret(self) -> None:
+        for name, job in self.workflow["jobs"].items():
+            if "secrets." in self.yaml.dump(job):
+                self.assertEqual(name, "auto-revert")
 
 
 if __name__ == "__main__":

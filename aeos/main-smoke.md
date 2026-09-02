@@ -28,15 +28,38 @@ permissions:
 jobs:
   smoke:
     uses: First-AI-Movers/.github/.github/workflows/aeos-main-smoke.yml@main
-    secrets: inherit
+    secrets:
+      AEOS_REVERT_APP_PRIVATE_KEY: ${{ secrets.AEOS_REVERT_APP_PRIVATE_KEY }}
 ```
 
 A caller is unavoidable: GitHub has no required-workflow equivalent for `push`,
 so each repository must opt in with these lines. Keep them exactly this size.
 
-`secrets: inherit` passes the organization's revert credentials through. Without
-it the smoke still runs and still reports; only the automatic revert is
-unavailable, and it says so in a typed way rather than failing quietly.
+The secret is passed **by name rather than with `secrets: inherit`**. Be clear
+about what that does and does not achieve. It does **not** reduce the key's
+exposure: the organization secret has All-repositories visibility, so any
+workflow in any organization repository can already read it, with or without this
+rail. What the explicit form does is stop this reusable workflow receiving every
+unrelated secret the adopting repository holds, and make the dependency visible
+in the caller instead of implicit. That is hygiene, not mitigation.
+
+The secret is optional. Omit the `secrets:` block entirely and the smoke still
+runs and still reports; only the automatic revert is unavailable, and it says so
+with a typed `AUTOREVERT_AUTH_UNAVAILABLE` rather than failing quietly.
+
+### Before adopting, in this order
+
+1. **`aeos-merge-ready` must already be required on the repository.** Not a
+   preference — a precondition. The revert is an ordinary pull request with
+   `--auto --squash` armed, so on a repository with no required checks it merges
+   **immediately and unjudged**. "The default branch is never pushed directly"
+   then becomes a distinction without a difference: the net effect is an
+   automated, unreviewed write to the default branch. Adopt the rail only where
+   the gate already covers the repository.
+2. **Squash auto-merge must be enabled** in repository settings, or arming fails
+   and the revert pull request sits open unattended (reported red).
+3. **The revert App must be installed** on the repository.
+4. **Then** add the caller above, naming the branch you actually push to.
 
 ## The three outcomes
 
@@ -214,38 +237,34 @@ configuration. Each one degrades to a typed red rather than to a silent green:
 
 | Assumption | If unmet |
 | --- | --- |
+| `aeos-merge-ready` is required on the repository | nothing fails — the revert merges immediately and unjudged (see the adoption order above) |
 | the branch pushed to is the one named in the caller | the caller simply never fires |
 | the organization's App id and key are visible to it | `AUTOREVERT_AUTH_UNAVAILABLE` — decision recorded, not executed |
 | the App is *installed* on the repository | the token mint fails with the action's own error — **not** one of the typed stops |
 | squash auto-merge is enabled in repository settings | `AUTOMERGE_ARM_FAILED` — the revert PR is open but nobody is watching it, so it is reported red |
+
+The first row is the one that fails silently rather than loudly, which is why it
+is a precondition and not a caveat.
 
 The rail reads the base branch from the push event rather than assuming `main`,
 so a repository whose default branch is named something else works, provided its
 caller names that branch. The adoption snippet hard-codes `branches: [main]`;
 change it if yours differs.
 
-### Two things adoption should be decided on, not discovered
+### The credential's blast radius
 
-**The revert pull request is only *judged* where the required `aeos-merge-ready`
-gate covers the repository.** Where it does not, `--auto --squash` on a
-repository with no required checks merges the revert **immediately**. "The
-default branch is never pushed directly" is then a distinction without a
-difference: the net effect is an automated, unreviewed write to the default
-branch. Adopt the rail on repositories the gate covers, or accept that.
+The organization's App private key has All-repositories visibility. Any workflow
+in any organization repository — authored by anyone who can push a branch there
+— can read it and exfiltrate it; masking does not survive chunking. **This is a
+property of the secret's visibility, not of this rail**, and passing the secret
+by name instead of inheriting it does not change it.
 
-**`secrets: inherit` means the organization's App private key is visible to the
-repository.** Once an organization secret is visible to a repository, any
-workflow in it — authored by anyone who can push a branch there — can read that
-secret and exfiltrate it; masking does not survive chunking. The key is
-long-lived and mints installation tokens carrying the App's **full installation
-permissions on every repository the App is installed on**. Scoping *this*
-token to contents + pull-requests narrows the token, not the key. So the honest
-statement of the credential's blast radius is: **adoption grants every committer
-on the adopting repository the App's org-wide write capability.** Hold the App's
-own installation permissions to exactly contents + pull-requests, install it
-only where the rail is adopted, and treat a broader structural fix — an
-organization-side dispatch or broker that never distributes the key — as the
-real answer.
+What is bounded is the damage: the key mints installation tokens carrying the
+App's **installed** permissions, so holding the App to exactly contents and
+pull-requests is what bounds the blast radius, and installing it only where the
+rail is adopted is what bounds its reach. The real fix is structural — an
+organization-side broker that never distributes the key at all — and is an
+operator decision, not something this rail can make for itself.
 
 ## Attribution safety
 

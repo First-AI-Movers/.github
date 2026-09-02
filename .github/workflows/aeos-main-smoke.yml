@@ -31,6 +31,22 @@ name: aeos-main-smoke
 
 on:
   workflow_call:
+    secrets:
+      AEOS_REVERT_APP_PRIVATE_KEY:
+        # Declared so a caller can pass this one secret by name instead of
+        # `secrets: inherit`. That does not reduce the key's exposure -- an
+        # organization secret visible to a repository is readable by any workflow
+        # in it either way -- but it stops this reusable workflow receiving every
+        # unrelated secret the adopting repository happens to hold, and it makes
+        # the dependency visible in the caller rather than implicit.
+        #
+        # Optional on purpose: without it the smoke still runs and still reports.
+        # Only the automatic revert is unavailable, and it says so with a typed
+        # AUTOREVERT_AUTH_UNAVAILABLE rather than failing quietly.
+        required: false
+        description: >-
+          Private key of the organization's revert GitHub App. Omit to run the
+          smoke without the automatic revert rail.
 
 permissions:
   contents: read
