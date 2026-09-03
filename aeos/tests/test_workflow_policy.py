@@ -94,16 +94,35 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     # -- rule 3: action pinning -----------------------------------------
     def test_unpinned_third_party_uses_fires(self) -> None:
-        for ref in ("some/action@v4", "some/action@main", "some/action", "a/b@1.2.3"):
+        for ref in ("some/action@v4", "some/action@main", "some/action", "a/b@1.2.3",
+                    "peter-evans/create-pull-request@v8", "lycheeverse/lychee-action@v2"):
             with self.subTest(ref=ref):
                 doc = _wf()
                 doc["jobs"]["build"]["steps"] = [{"uses": ref}]
                 self.assertTrue(wp.evaluate_workflow(WF, doc))
 
+    def test_first_party_tags_are_permitted_but_third_party_tags_are_not(self) -> None:
+        """The threat is a third-party maintainer moving a mutable tag. `actions/*`
+        and `github/*` are published by the same party that owns the runner and the
+        token, so a commit pin there closes nothing a compromise of GitHub itself
+        would not already have opened."""
+        for ref in ("actions/checkout@v7", "actions/setup-python@v7",
+                    "github/codeql-action/init@v3", "ACTIONS/cache@v4"):
+            with self.subTest(ref=ref):
+                doc = _wf()
+                doc["jobs"]["build"]["steps"] = [{"uses": ref}]
+                self.assertEqual(wp.evaluate_workflow(WF, doc), [], ref)
+        for ref in ("thirdparty/checkout@v7", "actionsfoo/checkout@v7"):
+            with self.subTest(ref=ref):
+                doc = _wf()
+                doc["jobs"]["build"]["steps"] = [{"uses": ref}]
+                self.assertTrue(wp.evaluate_workflow(WF, doc), ref)
+
     def test_pinned_local_docker_and_org_reusable_refs_are_silent(self) -> None:
         doc = _wf()
         doc["jobs"]["build"]["steps"] = [
             {"uses": f"actions/checkout@{PIN}"},
+            {"uses": f"thirdparty/action@{PIN}"},
             {"uses": "./.github/actions/thing"},
             {"uses": "docker://alpine:3"},
         ]
@@ -226,7 +245,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         probes = {
             "FORBIDDEN_TRIGGERS": _wf(on={"pull_request_target": None}),
             "BROAD_PERMISSION_TOKENS": _wf(permissions="write-all"),
-            "SHA_PIN_RE": {**_wf(), "jobs": {"b": {"steps": [{"uses": "x/y@v1"}]}},
+            "SHA_PIN_RE": {**_wf(), "jobs": {"b": {"steps": [{"uses": "thirdparty/y@v1"}]}},
                            "permissions": {"contents": "read"}},
             "INJECTION_CONTEXT_RE": {**_wf(), "jobs": {
                 "b": {"steps": [{"run": "echo ${{ github.head_ref }}"}]}}},
@@ -239,7 +258,7 @@ class WorkflowPolicyTests(unittest.TestCase):
             name
             for name in vars(wp)
             if name.isupper() and name.endswith(("_TRIGGERS", "_TOKENS", "_RE", "_NAMES"))
-            and name not in {"SHA_PIN_RE", "LOCAL_USES_RE", "DOCKER_USES_RE", "YAML_SUFFIXES"}
+            and name not in {"SHA_PIN_RE", "LOCAL_USES_RE", "DOCKER_USES_RE", "YAML_SUFFIXES", "FIRST_PARTY_ACTION_OWNERS"}
         } | {"SHA_PIN_RE"}
         self.assertEqual(declared - set(probes), set(), "a declared rule has no probe")
         for name, doc in probes.items():
