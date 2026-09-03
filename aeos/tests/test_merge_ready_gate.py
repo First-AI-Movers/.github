@@ -699,16 +699,47 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(len(report.exempted), 1)
         self.assertIn("superseded revision", report.exempted[0])
 
-    def test_a_control_plane_change_still_reads_no_content_at_all(self) -> None:
-        """The path-only short circuit must stay ahead of both scans."""
+    def test_a_secret_scrubbed_from_a_workflow_is_caught_not_deferred(self) -> None:
+        """The two changes compose, and the composition is strictly stronger.
+
+        This case used to be answered by the path-only short circuit: a
+        control-plane change was `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` before
+        any content was read, `scanned == 0`, and the credential sitting in the
+        superseded commit was never looked at by anything. A person was asked to
+        decide, and the thing worth deciding about was invisible to them.
+
+        Now the control-plane path enters the strict lane, so its content IS
+        read, and the range scan reaches the object the endpoint diff cannot see.
+        The verdict is the credential, named, on the exact path.
+        """
         self.repo.write(".github/workflows/ci.yml", f"# {self.SUPERSEDED}\n")
         self.repo.commit("workflow with a secret in it")
-        self.repo.write(".github/workflows/ci.yml", "on: push\njobs: {}\n")
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\npermissions:\n  contents: read\njobs: {}\n",
+        )
         head = self.repo.commit("scrub the workflow")
         report = self.run_gate(head)
-        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
-        self.assertEqual(report.scanned, 0)
-        self.assertEqual(report.history_scanned, 0)
+        self.assertFailsWith(report, gate.SECRET_SHAPE_DETECTED)
+        self.assertEqual(report.control_plane, [".github/workflows/ci.yml"])
+        self.assertEqual(report.scanned, 1)
+        self.assertGreaterEqual(report.history_scanned, 1)
+        detail = " ".join(f.detail for f in report.findings)
+        self.assertIn("superseded commit in this range", detail)
+
+    def test_the_head_side_of_a_control_plane_change_is_still_judged(self) -> None:
+        """Negative control for the case above: with no credential anywhere in
+        the range, the same workflow change passes on its own content — which is
+        the whole point of retiring the human verdict."""
+        self.repo.write(".github/workflows/ci.yml", "# nothing to see\n")
+        self.repo.commit("harmless first revision")
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\npermissions:\n  contents: read\njobs: {}\n",
+        )
+        report = self.run_gate(self.repo.commit("finish the workflow"))
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+        self.assertEqual(report.control_plane, [".github/workflows/ci.yml"])
 
     def test_a_shallow_clone_fails_closed(self) -> None:
         """rev-list stops at the graft boundary and reports a truncated range as
