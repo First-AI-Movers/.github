@@ -6,7 +6,9 @@ This is the **organization-wide default** contribution guide for **First AI Move
 
 ## Repository canon outranks this file
 
-A First-AI-Movers repository is governed by the canon it carries in its own root — typically `AGENTS.md` (the instruction surface for human and AI contributors), `CLAUDE.md` (the Claude Code entry point), and `ROADMAP.md` (live work state). **Where those files are present, they outrank this default.** Read them before opening an issue or a pull request: they carry the repository's actual scope, review contract, and stop conditions. This file states only what holds when a repository has said nothing more specific.
+A First-AI-Movers repository is governed by the canon it carries in its own root — typically `AGENTS.md` (the instruction surface for human and AI contributors) and `CLAUDE.md` (the Claude Code entry point). **Where those files are present, they outrank this default.** Read them before opening an issue or a pull request: they carry the repository's actual scope, review contract, and stop conditions. This file states only what holds when a repository has said nothing more specific.
+
+**Live work state is not in the repository.** What is in flight, blocked or done lives in GitHub Issues, the organization Project and pull requests. A repository carrying a `ROADMAP.md` or a similar status file is holding a second copy of something GitHub already owns.
 
 ## How changes reach a default branch
 
@@ -16,7 +18,9 @@ The organization ruleset **Protect main branches** governs the default branch of
 - **The default branch cannot be deleted, and it cannot be force-pushed.**
 - **Linear history is required** on the default branch.
 
-Ruleset coverage is applied per repository and can lag behind a newly created one. Required status checks are configured **per repository**, not organization-wide, so they differ between repositories. To see exactly what applies where you are working, read **Settings → Rules**, or ask GitHub directly:
+**One required check applies organization-wide.** `aeos-merge-ready` is injected onto every repository by the organization ruleset as a **Required Workflow**, served from this repository: a deterministic pre-merge verdict where trusted policy evaluates your changed bytes as data inside a 60-second ceiling and reports one typed reason on failure. It reads no review threads and waits for nothing.
+
+Ruleset coverage is applied per repository and can lag behind a newly created one, and a repository may add **further** required checks of its own on top of the organization's. To see exactly what applies where you are working, read **Settings → Rules**, or ask GitHub directly:
 
 ```bash
 # Run these from a clone of the repository you are asking about.
@@ -36,7 +40,7 @@ gh api --paginate "repos/{owner}/{repo}/rules/branches/$BRANCH_ENC"
 gh api "repos/{owner}/{repo}/branches/$BRANCH_ENC/protection"
 ```
 
-**Both are needed: they are independent mechanisms and either can block your pull request.** The first command returns ruleset-derived rules only. A non-empty answer there is *not* the whole picture — a repository can return a healthy list of ruleset rules while its **required status checks** live in classic protection and never appear in that output at all. `First-AI-Movers/articles` was in exactly that state when this guide was last verified (2026-08-31): the rules endpoint returned ruleset rules while its merge-blocking status checks were visible only through the second command. That is a snapshot, not a standing fact — run both commands against the repository you are working in rather than trusting either this example or the first command alone. **A `404` from the second command is only meaningful if you could otherwise read the repository's settings.** GitHub returns `404` both when classic protection genuinely is absent *and* when the caller lacks repository **Administration: read** permission — it deliberately does not distinguish "not there" from "not yours to see", so an under-permissioned contributor can read a `404` as "unprotected" and miss merge-blocking rules. Treat `404` as absence only when the first command succeeded for the same repository and your token carries Administration read; otherwise treat it as **unknown** and ask a repository admin.
+**Both are needed: they are independent mechanisms and either can block your pull request.** The first command returns ruleset-derived rules only. A non-empty answer there is *not* the whole picture — a repository can return a healthy list of ruleset rules while its **required status checks** live in classic protection and never appear in that output at all. `First-AI-Movers/articles` was in exactly that state when this guide was first written (2026-08-31): the rules endpoint returned ruleset rules while its merge-blocking status checks were visible only through the second command. **On re-verification (2026-09-03) that was no longer true of `articles`** — the second command returned `Branch not protected` and its rules came entirely from organization rulesets. Which is exactly the point: a snapshot, not a standing fact. Run both commands against the repository you are working in rather than trusting either this example or the first command alone. **A `404` from the second command is only meaningful if you could otherwise read the repository's settings.** GitHub returns `404` both when classic protection genuinely is absent *and* when the caller lacks repository **Administration: read** permission — it deliberately does not distinguish "not there" from "not yours to see", so an under-permissioned contributor can read a `404` as "unprotected" and miss merge-blocking rules. Treat `404` as absence only when the first command succeeded for the same repository and your token carries Administration read; otherwise treat it as **unknown** and ask a repository admin.
 
 What those commands return together is what will actually be enforced against your pull request. Treat them, not this file, as the authority on any given repository.
 
