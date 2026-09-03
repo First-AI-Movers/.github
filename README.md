@@ -37,10 +37,11 @@ and only this one is public.
 
 | Rail | What it does |
 |---|---|
+| [`.github/workflows/aeos-merge-ready.yml`](./.github/workflows/aeos-merge-ready.yml) | the **required** pre-merge verdict, injected onto every organization repository by ruleset as a Required Workflow. Trusted policy from this repository's `main` evaluates the candidate's changed bytes as data, inside a 60-second ceiling, and reports one typed reason on failure — see [`aeos/README.md`](./aeos/README.md) |
 | [`.github/workflows/aeos-main-smoke.yml`](./.github/workflows/aeos-main-smoke.yml) | post-merge smoke of the exact merged SHA, plus the deterministic circuit breaker and automatic revert — see [`aeos/main-smoke.md`](./aeos/main-smoke.md) for the ~12-line per-repository caller |
 
 Both rails are repository-agnostic: they depend on no file existing in the
 repository they run against, and a brand-new repository passes. Candidate code
 is treated as data by the merge gate and is never executed by it.
 
-Apart from these, the repo intentionally stays minimal — organization defaults and profile metadata.
+Apart from these, the repo intentionally stays minimal — organization defaults, profile metadata, and the instruction surface for agents working here ([`AGENTS.md`](./AGENTS.md)).
