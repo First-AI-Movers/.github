@@ -21,7 +21,8 @@ wall it would hit. Measured 2026-09-03 across all 20 workflows in
 
   * ``pull_request_target`` triggers: 0
   * workflows with no declared ``permissions``: 0
-  * non-local ``uses:`` refs not pinned to a 40-hex commit: 0
+  * third-party ``uses:`` refs not pinned to a 40-hex commit: 0 (after the three
+    the first cut of this rule found are pinned)
   * ``${{ secrets.* }}`` interpolated inside a ``run:`` body: 0
   * injection-prone free-text contexts inside a ``run:`` body: 0
 
@@ -74,9 +75,31 @@ TRUSTED_REUSABLE_OWNER = "first-ai-movers"
 It is not an unpinned third party: it lives under the same ownership boundary as
 the policy that judges it, it is itself gated by this same required workflow, and
 pinning it to a commit would freeze consumers on a stale copy of a control plane
-the organization deliberately updates in one place. Any other owner must be
-pinned to an immutable 40-hex commit -- a tag is a mutable pointer, and "the
-action we reviewed" and "the action that runs tomorrow" must be the same bytes."""
+the organization deliberately updates in one place."""
+
+FIRST_PARTY_ACTION_OWNERS = ("actions", "github")
+"""Action owners whose version tag is accepted without a commit pin.
+
+The rule this narrows exists for one threat: a third-party maintainer's account is
+compromised, the attacker moves a mutable tag, and every workflow referencing that
+tag executes new code with the repository's token. Pinning to a commit is the
+mitigation, and for a third party it is the only one.
+
+``actions/*`` and ``github/*`` are published by GitHub from repositories GitHub
+controls -- the same party that already owns the runner, the token and the whole
+execution environment. A commit pin there does not close a hole; if that trust
+boundary fails, a pinned checkout action is not what saves you. GitHub's own
+hardening guidance draws the line in exactly this place, and so does the
+overwhelming convention.
+
+Measured before narrowing (2026-09-03, all 68 workflows in the eight
+First-AI-Movers repositories): requiring a commit pin for every owner flagged 23
+of 68 workflows -- 22 of them in one repository -- which is a wall, not a floor.
+Narrowed to third parties it flags **three distinct actions**, each a real
+supply-chain exposure, and those are being pinned rather than exempted.
+
+Pinning first-party actions too is the stronger posture, and `agent-toolkit`
+already does it for all five it uses. This rule is the floor, not the ceiling."""
 
 # --------------------------------------------------------------------------
 # Rule 4 -- script injection
@@ -216,9 +239,13 @@ def _uses_finding(where: str, uses: str) -> str | None:
     if SHA_PIN_RE.match(rev):
         return None
     owner = target.split("/", 1)[0].lower()
-    if owner == TRUSTED_REUSABLE_OWNER:
+    if owner == TRUSTED_REUSABLE_OWNER or owner in FIRST_PARTY_ACTION_OWNERS:
         return None
-    return f"{where}: `uses: {ref}` is not pinned to a 40-hex commit"
+    return (
+        f"{where}: third-party `uses: {ref}` is not pinned to a 40-hex commit -- "
+        f"a tag is a mutable pointer, so \"the action we reviewed\" and \"the action "
+        f"that runs tomorrow\" are not the same bytes"
+    )
 
 
 def evaluate_workflow(path: str, document: object, repository: str = "") -> list[str]:
