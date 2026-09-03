@@ -141,6 +141,15 @@ MODE_SYMLINK = "120000"
 MODE_GITLINK = "160000"
 REGULAR_MODES = ("100644", "100755")
 MAX_FINDINGS_PER_FILE = 5
+MAX_HISTORY_BLOBS = 4000
+"""Bound on blobs read from the range history beyond the head-side changed set.
+
+The head-side scan is bounded by the changed set, which a branch cannot inflate
+without also inflating the diff a human reads. The range carries no such natural
+bound: every intermediate revision of every file contributes an object. Four
+thousand is two orders of magnitude above an ordinary pull request and still
+reads in well under the budget; past it the gate reports a truncation rather
+than silently measuring less than it claims to."""
 MAX_FINDINGS_REPORTED = 100
 GIT_TIMEOUT_SECONDS = 30
 
@@ -443,6 +452,58 @@ def read_blobs(candidate_dir: str, shas: list[str]) -> dict[str, bytes]:
         blobs[sha] = out[start : start + size]
         pos = start + size + 1  # content is followed by a newline
     return blobs
+
+
+def history_objects(candidate_dir: str, base_sha: str, head_sha: str) -> list[tuple[str, str]]:
+    """Every object introduced by the range, as ``(object id, path)`` pairs.
+
+    ``rev-list --objects head --not base`` is the set of objects reachable from
+    the head that the base does not already have: exactly the content this
+    branch adds to the repository. A file added by one commit in the range and
+    removed by a later one is absent from the ``base...head`` diff -- the diff
+    compares two endpoints and this content is at neither -- but it is still
+    reachable from the commit that introduced it, so it appears here.
+
+    That difference is the whole point. A credential committed and then scrubbed
+    before the pull request's head is invisible to an endpoint diff, survives on
+    ``refs/pull/<n>/head`` after the branch is deleted, and -- under a
+    squash-only merge policy, which is what this gate is deployed behind --
+    never reaches the default branch at all, so no post-merge history scan sees
+    it either. Nothing else in the lifecycle looks at these objects.
+
+    Commits and trees come back from ``rev-list`` alongside blobs; the caller
+    filters to blobs by object type rather than by guessing from the path.
+
+    Fails closed: an unreadable range is never an empty range, and a shallow
+    clone is refused outright because ``rev-list`` would quietly stop at the
+    graft boundary and report a truncated set as a complete one.
+    """
+    shallow = _run_git(candidate_dir, ["rev-parse", "--is-shallow-repository"])
+    if shallow.returncode != 0:
+        detail = shallow.stderr.decode("utf-8", "replace").strip() or "git rev-parse failed"
+        raise GateError(EVIDENCE_UNREADABLE, f"cannot determine clone depth: {detail}")
+    if shallow.stdout.decode("utf-8", "replace").strip() == "true":
+        raise GateError(
+            EVIDENCE_UNREADABLE,
+            "the candidate checkout is shallow; the range history cannot be enumerated "
+            "(check out with fetch-depth: 0)",
+        )
+
+    proc = _run_git(candidate_dir, ["rev-list", "--objects", head_sha, "--not", base_sha])
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip() or "git rev-list failed"
+        raise GateError(EVIDENCE_UNREADABLE, f"range history is unreadable: {detail}")
+
+    pairs: list[tuple[str, str]] = []
+    for raw in proc.stdout.split(b"\n"):
+        if not raw:
+            continue
+        line = raw.decode("utf-8", "replace")
+        sha, _, path = line.partition(" ")
+        if not path:
+            continue  # a commit: it names no path and holds no content
+        pairs.append((sha, _safe_relpath(path)))
+    return pairs
 
 
 # --------------------------------------------------------------------------
@@ -760,6 +821,7 @@ class Report:
         self.config = GateConfig()
         self.control_plane: list[str] = []
         self.scanned = 0
+        self.history_scanned = 0
         self.deleted = 0
         self.elapsed = 0.0
         self.primary: str | None = None
@@ -941,6 +1003,108 @@ def evaluate(
                             change.path, data, repository
                         )
                     )
+
+        # -- the range, not just its endpoints ----------------------------
+        # Everything above judged the head tree. This judges what the branch
+        # adds to the repository on the way there: content that some commit in
+        # the range introduced and a later commit removed is at neither endpoint
+        # of the diff, so nothing above has looked at it.
+        #
+        # Only the secret-shape floor runs here. A syntax error or an
+        # unparseable config in a superseded revision is not a defect in what
+        # this branch proposes to merge -- the head is what merges. A credential
+        # is different in kind: publishing it is the harm, and the publishing
+        # already happened when the object was pushed.
+        if over_budget:
+            report.skipped.append("range history: not read, the budget was already exhausted")
+        else:
+            head_blobs = {c.blob_sha for c in changes if not c.deleted}
+            seen: set[str] = set(head_blobs)
+            pending: list[tuple[str, str]] = []
+            for sha, path in history_objects(candidate_dir, base_sha, head_sha):
+                if sha in seen:
+                    continue
+                seen.add(sha)
+                pending.append((sha, path))
+            if len(pending) > MAX_HISTORY_BLOBS:
+                report.skipped.append(
+                    f"range history: {len(pending) - MAX_HISTORY_BLOBS} of {len(pending)} "
+                    f"intermediate objects not read, over the {MAX_HISTORY_BLOBS}-object cap"
+                )
+                pending = pending[:MAX_HISTORY_BLOBS]
+
+            # Non-blob objects (the trees rev-list reports alongside them) are
+            # absent from this mapping and drop out below on type, not on a
+            # guess made from the path.
+            history_sizes = blob_sizes(candidate_dir, sorted({sha for sha, _ in pending}))
+            history_batches: list[list[tuple[str, str]]] = []
+            group: list[tuple[str, str]] = []
+            held = 0
+            unscannable = 0
+            for sha, path in pending:
+                size = history_sizes.get(sha)
+                if size is None or size > MAX_SCAN_BYTES:
+                    # Not a blob, or past the same cap the head-side scan uses.
+                    unscannable += size is not None
+                    continue
+                if group and held + size > BATCH_BYTES:
+                    history_batches.append(group)
+                    group, held = [], 0
+                group.append((sha, path))
+                held += size
+            if group:
+                history_batches.append(group)
+            if unscannable:
+                report.skipped.append(
+                    f"range history: {unscannable} intermediate object(s) over the "
+                    f"{MAX_SCAN_BYTES}-byte secret-shape cap"
+                )
+
+            for batch_group in history_batches:
+                if over_budget:
+                    break
+                blobs = read_blobs(candidate_dir, sorted({sha for sha, _ in batch_group}))
+                for sha, path in batch_group:
+                    if budget_tripped():
+                        report.findings.append(
+                            Finding(
+                                BUDGET_EXCEEDED,
+                                path,
+                                f"hard budget of {hard_budget:g}s exhausted after "
+                                f"{report.scanned} changed and {report.history_scanned} "
+                                f"superseded files",
+                            )
+                        )
+                        over_budget = True
+                        break
+                    data = blobs.get(sha)
+                    if data is None:
+                        raise GateError(
+                            EVIDENCE_UNREADABLE,
+                            f"{path}: superseded content {sha} was not returned",
+                        )
+                    report.history_scanned += 1
+                    secret_findings, _skip = scan_secret_shapes(path, data)
+                    if not secret_findings:
+                        continue
+                    if report.config.exempts_secret_shapes(path):
+                        report.exempted.extend(
+                            f"{path} ({f.detail}, superseded revision)" for f in secret_findings
+                        )
+                        continue
+                    # Every blob still here is reachable from the head and not
+                    # from the base, and is not one of the head tree's own
+                    # blobs -- so it exists in this range and nowhere in the
+                    # tree that would be merged.
+                    report.findings.extend(
+                        Finding(
+                            f.code,
+                            f.path,
+                            f"{f.detail} \u2014 in a superseded commit in this range, "
+                            f"not in the head tree",
+                        )
+                        for f in secret_findings
+                    )
     except GateError as exc:
         report.findings.append(Finding(exc.code, "-", exc.detail))
         report.elapsed = elapsed()
@@ -1011,6 +1175,7 @@ def render(report: Report, repository: str, event_name: str, base_sha: str, head
         f"- base sha: `{base_sha or '(unset)'}`",
         f"- head sha: `{head_sha or '(unset)'}`",
         f"- changed files scanned: {report.scanned} (deleted, not read: {report.deleted})",
+        f"- superseded revisions scanned: {report.history_scanned}",
         f"- gate body: {report.elapsed:.3f}s",
     ]
     if _yaml is None:

@@ -20,6 +20,7 @@ pull-request-body semantics, and no waiting.
 | Changed control-plane paths satisfy the strict lane below | `WORKFLOW_POLICY_VIOLATION` · `CONTROL_PLANE_PROOF_FAILED` |
 | A control-plane **deletion** in this policy repository | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | No high-confidence credential shape in changed text | `SECRET_SHAPE_DETECTED` |
+| No high-confidence credential shape in any revision the range introduces | `SECRET_SHAPE_DETECTED` |
 | Changed `.json` parses; changed `.yml`/`.yaml` parses | `STRUCTURED_DATA_UNPARSEABLE` |
 | Changed `.py` parses (parse only — never imported, never run) | `SYNTAX_ERROR` |
 | The changed set itself is readable | `EVIDENCE_UNREADABLE` |
@@ -38,6 +39,35 @@ this floor is not what stops a determined leak.
 The gate runs on `pull_request` and `merge_group` only. Those are the events
 that carry a real two-endpoint commit range; anything else would have to invent
 one, and an invented range produces a pass that measured nothing.
+
+### The credential check reads the range, not just its endpoints
+
+Every other check judges the head: the head is what merges, and a syntax error
+in a revision that was superseded three commits ago is not a defect in what this
+branch proposes. A credential is different in kind. Publishing it *is* the harm,
+and the publishing already happened when the object was pushed.
+
+So the credential check reads two populations: the changed set (`base...head`),
+and every blob the range introduces that is not in the head tree
+(`rev-list --objects head --not base`). The second population is the one that
+catches a token committed by one commit and scrubbed by a later one before the
+pull request was opened. Nothing else in the lifecycle looks at it:
+
+- the endpoint diff cannot — the content is at neither endpoint;
+- a post-merge history scan cannot, under the squash-only merge policy this gate
+  is deployed behind, because the superseded commit never joins the default
+  branch;
+- deleting the branch does not remove it — `refs/pull/<n>/head` keeps the objects,
+  and in a public repository anyone can fetch them.
+
+Findings from a superseded revision carry the same reason code and name the path
+and line; the value is never echoed, and the operator allowlist exempts a path's
+superseded revisions exactly as it exempts its head revision. The extra work is
+bounded by the same per-file byte cap, an object cap, and the same time budget —
+a hundred files rewritten across ten commits (900 superseded revisions) measures
+0.6 s against a 45 s budget. A shallow candidate checkout is refused rather than
+scanned, because `rev-list` would stop at the graft boundary and report a
+truncated range as a complete one.
 
 ## What it does not require
 

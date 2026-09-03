@@ -619,6 +619,154 @@ class GateTestCase(unittest.TestCase):
         )
         self.assertFailsWith(report, gate.EVIDENCE_UNREADABLE)
 
+    # -- the range, not just its endpoints ---------------------------------
+    # A branch that commits a credential and scrubs it before opening the pull
+    # request leaves the object on `refs/pull/<n>/head` forever. The endpoint
+    # diff cannot see it -- the content is at neither endpoint -- and under the
+    # squash-only merge policy this gate is deployed behind it never reaches the
+    # default branch either, so no post-merge history scan sees it. These tests
+    # pin the only place in the lifecycle that looks.
+    SUPERSEDED = "gh" + "p_" + "Z9y8X7w6V5" * 3 + "Z9y8X7"  # 36 chars after the prefix
+
+    def test_secret_committed_then_removed_before_head_is_caught(self) -> None:
+        self.repo.write("deploy.sh", f"#!/bin/sh\nexport TOKEN={self.SUPERSEDED}\n")
+        self.repo.commit("oops, a credential")
+        self.repo.write("deploy.sh", "#!/bin/sh\nexport TOKEN=$FROM_ENV\n")
+        head = self.repo.commit("scrub it before anyone looks")
+
+        # The head tree is clean: only the range scan can produce this verdict,
+        # so deleting that conjunct turns this test red rather than leaving it
+        # satisfied by the head-side scan.
+        self.assertNotIn(self.SUPERSEDED, open(os.path.join(self.repo.root, "deploy.sh")).read())
+        report = self.run_gate(head)
+        self.assertFailsWith(report, gate.SECRET_SHAPE_DETECTED)
+        self.assertEqual(report.findings[0].path, "deploy.sh")
+        self.assertIn("superseded commit", report.findings[0].detail)
+        self.assertEqual(report.history_scanned, 1)
+
+    def test_a_superseded_secret_value_is_never_echoed(self) -> None:
+        self.repo.write("infra/creds.tf", f'key = "{self.SUPERSEDED}"\n')
+        self.repo.commit("leak")
+        self.repo.write("infra/creds.tf", 'key = var.token\n')
+        head = self.repo.commit("scrub")
+        report = self.run_gate(head)
+        self.assertFailsWith(report, gate.SECRET_SHAPE_DETECTED)
+        rendered = gate.render(report, "r", "pull_request", self.repo.base, head)
+        self.assertNotIn(self.SUPERSEDED, rendered)
+        self.assertIn("github_token", rendered)
+
+    def test_a_file_added_and_deleted_within_the_range_is_caught(self) -> None:
+        """The deletion route reads nothing at head; the object still exists."""
+        self.repo.write("tmp/scratch.env", f"TOKEN={self.SUPERSEDED}\n")
+        self.repo.commit("scratch file")
+        self.repo.remove("tmp/scratch.env")
+        head = self.repo.commit("remove the scratch file")
+        report = self.run_gate(head)
+        self.assertFailsWith(report, gate.SECRET_SHAPE_DETECTED)
+        self.assertEqual(report.findings[0].path, "tmp/scratch.env")
+
+    def test_a_clean_multi_commit_range_still_passes(self) -> None:
+        self.repo.write("src/app.py", "VALUE = 1\n")
+        self.repo.commit("first")
+        self.repo.write("src/app.py", "VALUE = 2\n")
+        self.repo.commit("second")
+        self.repo.write("src/app.py", "VALUE = 3\n")
+        head = self.repo.commit("third")
+        report = self.run_gate(head)
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+        # Two superseded revisions of app.py; the head revision is the changed set.
+        self.assertEqual(report.scanned, 1)
+        self.assertEqual(report.history_scanned, 2)
+
+    def test_the_head_revision_is_not_scanned_twice(self) -> None:
+        self.repo.write("src/app.py", "VALUE = 1\n")
+        head = self.repo.commit("single commit")
+        report = self.run_gate(head)
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+        self.assertEqual(report.scanned, 1)
+        self.assertEqual(report.history_scanned, 0)
+
+    def test_an_allowlisted_path_exempts_its_superseded_revisions_too(self) -> None:
+        self.seed_gate_config(
+            {"schema_version": "1", "secret_shape_allowlist": ["Engine/scripts/tests/**"]}
+        )
+        self.repo.write("Engine/scripts/tests/test_supply.py", f"TOKEN = '{self.SUPERSEDED}'\n")
+        self.repo.commit("verified canary")
+        self.repo.write("Engine/scripts/tests/test_supply.py", "TOKEN = None\n")
+        head = self.repo.commit("retire the canary")
+        report = self.run_gate(head)
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+        self.assertEqual(len(report.exempted), 1)
+        self.assertIn("superseded revision", report.exempted[0])
+
+    def test_a_secret_scrubbed_from_a_workflow_is_caught_not_deferred(self) -> None:
+        """The two changes compose, and the composition is strictly stronger.
+
+        This case used to be answered by the path-only short circuit: a
+        control-plane change was `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` before
+        any content was read, `scanned == 0`, and the credential sitting in the
+        superseded commit was never looked at by anything. A person was asked to
+        decide, and the thing worth deciding about was invisible to them.
+
+        Now the control-plane path enters the strict lane, so its content IS
+        read, and the range scan reaches the object the endpoint diff cannot see.
+        The verdict is the credential, named, on the exact path.
+        """
+        self.repo.write(".github/workflows/ci.yml", f"# {self.SUPERSEDED}\n")
+        self.repo.commit("workflow with a secret in it")
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\npermissions:\n  contents: read\njobs: {}\n",
+        )
+        head = self.repo.commit("scrub the workflow")
+        report = self.run_gate(head)
+        self.assertFailsWith(report, gate.SECRET_SHAPE_DETECTED)
+        self.assertEqual(report.control_plane, [".github/workflows/ci.yml"])
+        self.assertEqual(report.scanned, 1)
+        self.assertGreaterEqual(report.history_scanned, 1)
+        detail = " ".join(f.detail for f in report.findings)
+        self.assertIn("superseded commit in this range", detail)
+
+    def test_the_head_side_of_a_control_plane_change_is_still_judged(self) -> None:
+        """Negative control for the case above: with no credential anywhere in
+        the range, the same workflow change passes on its own content — which is
+        the whole point of retiring the human verdict."""
+        self.repo.write(".github/workflows/ci.yml", "# nothing to see\n")
+        self.repo.commit("harmless first revision")
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\npermissions:\n  contents: read\njobs: {}\n",
+        )
+        report = self.run_gate(self.repo.commit("finish the workflow"))
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+        self.assertEqual(report.control_plane, [".github/workflows/ci.yml"])
+
+    def test_a_shallow_clone_fails_closed(self) -> None:
+        """rev-list stops at the graft boundary and reports a truncated range as
+        a complete one; a green from that measured less than it claims."""
+        self.repo.write("src/app.py", "VALUE = 1\n")
+        self.repo.commit("first")
+        self.repo.write("src/app.py", "VALUE = 2\n")
+        head = self.repo.commit("second")
+        # Graft at the base: the endpoint diff still resolves, so this reaches
+        # the range scan rather than failing earlier for a different reason.
+        with open(os.path.join(self.repo.root, ".git", "shallow"), "w", encoding="utf-8") as fh:
+            fh.write(self.repo.base + "\n")
+        report = self.run_gate(head)
+        self.assertFailsWith(report, gate.EVIDENCE_UNREADABLE)
+        self.assertIn("shallow", report.findings[0].detail)
+        with self.assertRaises(gate.GateError):
+            gate.history_objects(self.repo.root, self.repo.base, head)
+
+    def test_binary_superseded_content_does_not_break_the_scan(self) -> None:
+        self.repo.write_bytes("assets/blob.bin", b"\x00\x01\x02" * 64)
+        self.repo.commit("binary")
+        self.repo.write_bytes("assets/blob.bin", b"\x00\x09" * 64)
+        head = self.repo.commit("different binary")
+        report = self.run_gate(head)
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+        self.assertEqual(report.history_scanned, 1)
+
     # -- operator allowlist (.github/aeos-gate.json) -----------------------
     LEAK = "gh" + "p_" + "B7q2X" * 7 + "cA"  # 36 chars after the prefix
 
