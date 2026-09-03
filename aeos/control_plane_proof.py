@@ -143,6 +143,16 @@ def evaluate_smoke_config(path: str, data: bytes) -> list[str]:
 # --------------------------------------------------------------------------
 # Gate-source integrity
 # --------------------------------------------------------------------------
+GATE_SOURCE_PATH = "aeos/merge_ready_gate.py"
+"""The exact path the anti-ratchet floor applies to -- matched whole, not by suffix.
+
+A suffix match here is wrong in a way that only shows up in production:
+``aeos/tests/test_merge_ready_gate.py`` also ends with ``merge_ready_gate.py``, so
+the gate's own test file gets held to the module's declaration contract and fails
+for not defining constants a test module has no business defining. That is exactly
+what happened to `First-AI-Movers/.github` PR #6, whose only offence was touching
+the tests beside the code."""
+
 REQUIRED_GATE_CONSTANTS = (
     "CONTROL_PLANE_PREFIXES",
     "CONTROL_PLANE_PATHS",
@@ -186,7 +196,7 @@ def evaluate_policy_source(path: str, data: bytes) -> list[str]:
         tree = ast.parse(data.decode("utf-8"), filename=path)
     except Exception as exc:  # noqa: BLE001 - the syntax floor reports this too
         return [f"{path}: is not parseable Python ({type(exc).__name__})"]
-    if not path.lower().endswith("merge_ready_gate.py"):
+    if path.lower() != GATE_SOURCE_PATH:
         return []
     names = _module_level_names(tree)
     missing = [c for c in REQUIRED_GATE_CONSTANTS if c not in names]
