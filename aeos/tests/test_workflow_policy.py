@@ -342,6 +342,29 @@ class ControlPlaneProofTests(unittest.TestCase):
         self.assertEqual(cpp.evaluate_policy_source("aeos/helper.py", b"x = 1\n"), [])
         self.assertEqual(cpp.evaluate_policy_source("aeos/README.md", b"not python ("), [])
 
+    def test_the_floor_matches_the_gate_source_whole_and_not_by_suffix(self) -> None:
+        """Negative control for a bug this floor shipped with.
+
+        The first cut tested `path.endswith("merge_ready_gate.py")`, which also
+        matches the gate's own TEST file. `First-AI-Movers/.github` PR #6 — a
+        security fix whose only offence was editing the tests beside the code —
+        failed with four `CONTROL_PLANE_PROOF_FAILED` findings for not declaring
+        constants a test module has no business declaring.
+
+        Every path below ends with the protected filename and none of them is it.
+        """
+        for path in (
+            "aeos/tests/test_merge_ready_gate.py",
+            "aeos/tests/helpers_merge_ready_gate.py",
+            "aeos/vendor/aeos/merge_ready_gate.py",
+            "tools/merge_ready_gate.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(cpp.evaluate_policy_source(path, b"x = 1\n"), [], path)
+        # ...and the real one is still held to the contract, so this is a
+        # narrowing rather than a hole.
+        self.assertTrue(cpp.evaluate_policy_source(cpp.GATE_SOURCE_PATH, b"x = 1\n"))
+
     # -- deletion --------------------------------------------------------
     def test_deletion_is_operator_governed_only_in_the_policy_repository(self) -> None:
         self.assertTrue(
