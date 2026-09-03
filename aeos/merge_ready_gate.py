@@ -31,7 +31,6 @@ import hashlib
 import json
 import os
 import re
-import stat
 import subprocess
 import sys
 import time
@@ -48,10 +47,19 @@ else:
     # fits its budget on a large changed set and one that does not.
     _YAML_SAFE_LOADER = getattr(_yaml, "CSafeLoader", None) or _yaml.SafeLoader
 
+if __package__ in (None, ""):  # executed as a script from the trusted checkout
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from control_plane_proof import (  # noqa: E402
+    evaluate_control_plane_deletion,
+    evaluate_control_plane_file,
+)
+
 # --------------------------------------------------------------------------
 # Closed reason-code vocabulary. Nothing outside this tuple is ever emitted.
 # --------------------------------------------------------------------------
 CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR = "CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR"
+CONTROL_PLANE_PROOF_FAILED = "CONTROL_PLANE_PROOF_FAILED"
+WORKFLOW_POLICY_VIOLATION = "WORKFLOW_POLICY_VIOLATION"
 SECRET_SHAPE_DETECTED = "SECRET_SHAPE_DETECTED"
 STRUCTURED_DATA_UNPARSEABLE = "STRUCTURED_DATA_UNPARSEABLE"
 SYNTAX_ERROR = "SYNTAX_ERROR"
@@ -63,6 +71,8 @@ REASON_CODES = (
     EVIDENCE_UNREADABLE,
     GATE_CONFIG_INVALID,
     CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR,
+    CONTROL_PLANE_PROOF_FAILED,
+    WORKFLOW_POLICY_VIOLATION,
     BUDGET_EXCEEDED,
     SECRET_SHAPE_DETECTED,
     STRUCTURED_DATA_UNPARSEABLE,
@@ -748,6 +758,7 @@ class Report:
         self.skipped: list[str] = []
         self.exempted: list[str] = []
         self.config = GateConfig()
+        self.control_plane: list[str] = []
         self.scanned = 0
         self.deleted = 0
         self.elapsed = 0.0
@@ -797,24 +808,18 @@ def evaluate(
     except Exception as exc:  # noqa: BLE001 - see _abort
         return _abort(report, elapsed(), "resolving the changed set", exc)
 
-    violations = control_plane_violations([c.path for c in changes], repository)
-    if violations:
-        # Short-circuit: an operator-governed change is decided by path alone.
-        # No candidate content is read at all on this route.
-        for path in violations:
-            report.findings.append(
-                Finding(
-                    CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR,
-                    path,
-                    "control-plane path; an operator must review and merge this change",
-                )
-            )
-        report.elapsed = elapsed()
-        report.resolve_primary()
-        return report
+    # A control-plane path no longer short-circuits to a human verdict. It enters
+    # the STRICT lane instead (#3311): the candidate's bytes are measured against
+    # floors specific to the merge-control surface it changes, by the trusted
+    # policy resolved from the base commit. It is judged, not deferred.
+    report.control_plane = control_plane_violations([c.path for c in changes], repository)
+    strict = {p.lower() for p in report.control_plane}
 
-    # Only now, once no control-plane path is in play, may exemptions matter.
-    # A branch proposing a change to the configuration never reaches this line.
+    # Exemptions are read from the BASE commit either way, so a branch still
+    # cannot exempt itself. What changes here is narrower and deliberate: an
+    # allowlist entry may never cover a control-plane path. Letting the gate
+    # config waive a secret shape on a workflow would be a self-serve bypass of
+    # the one check standing between a credential and a branch.
     try:
         report.config = load_gate_config(candidate_dir, base_sha)
     except GateError as exc:
@@ -833,6 +838,13 @@ def evaluate(
         for change in changes:
             if change.deleted:
                 report.deleted += 1
+                if change.path.lower() in strict:
+                    report.findings.extend(
+                        Finding(code, change.path, detail)
+                        for code, detail in evaluate_control_plane_deletion(
+                            change.path, repository
+                        )
+                    )
             elif change.mode == MODE_GITLINK:
                 report.skipped.append(
                     f"{change.path}: submodule reference, content is not in this repository"
@@ -902,7 +914,11 @@ def evaluate(
                     secret_findings, skip_reason = scan_secret_shapes(change.path, data)
                     if skip_reason:
                         report.skipped.append(f"{change.path}: {skip_reason}")
-                    elif secret_findings and report.config.exempts_secret_shapes(change.path):
+                    elif (
+                        secret_findings
+                        and change.path.lower() not in strict
+                        and report.config.exempts_secret_shapes(change.path)
+                    ):
                         # The allowlist exempts this conjunct and no other: the
                         # structured-data and syntax floors below still run, and
                         # the suppression is reported rather than made invisible.
@@ -918,6 +934,13 @@ def evaluate(
                     )
                 report.findings.extend(parse_structured(change.path, data))
                 report.findings.extend(parse_python(change.path, data))
+                if change.path.lower() in strict:
+                    report.findings.extend(
+                        Finding(code, change.path, detail)
+                        for code, detail in evaluate_control_plane_file(
+                            change.path, data, repository
+                        )
+                    )
     except GateError as exc:
         report.findings.append(Finding(exc.code, "-", exc.detail))
         report.elapsed = elapsed()
@@ -992,6 +1015,12 @@ def render(report: Report, repository: str, event_name: str, base_sha: str, head
     ]
     if _yaml is None:
         lines.append("- yaml parser: unavailable (changed YAML files fail closed)")
+    if report.control_plane:
+        lines.append(
+            f"- control-plane paths in the strict lane: {len(report.control_plane)} "
+            f"(`" + "`, `".join(report.control_plane[:8]) + "`"
+            + (", …" if len(report.control_plane) > 8 else "") + ")"
+        )
     if report.config.present:
         lines.append(
             f"- gate config: `{GATE_CONFIG_PATH}` on the base commit, "

@@ -17,7 +17,8 @@ pull-request-body semantics, and no waiting.
 
 | Check | Reason code on failure |
 | --- | --- |
-| No changed path in the control-plane set below | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
+| Changed control-plane paths satisfy the strict lane below | `WORKFLOW_POLICY_VIOLATION` · `CONTROL_PLANE_PROOF_FAILED` |
+| A control-plane **deletion** in this policy repository | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | No high-confidence credential shape in changed text | `SECRET_SHAPE_DETECTED` |
 | Changed `.json` parses; changed `.yml`/`.yaml` parses | `STRUCTURED_DATA_UNPARSEABLE` |
 | Changed `.py` parses (parse only — never imported, never run) | `SYNTAX_ERROR` |
@@ -67,11 +68,10 @@ Candidate bytes are data, never code.
 - Event values reach the gate as environment variables, never interpolated into
   a shell body.
 
-## The control-plane set
+## The control-plane set — and the strict lane
 
-A changed path matching any of these is operator-governed and fails with
-`CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`. Matching is case-insensitive, and a
-deletion counts as a change.
+A changed path matching any of these is merge-control surface. Matching is
+case-insensitive, and a deletion counts as a change.
 
 - `.github/workflows/**`
 - `.github/actions/**`
@@ -79,15 +79,56 @@ deletion counts as a change.
 - `.github/aeos-smoke.json`
 
 Each decides how a check behaves, so a branch able to edit its own copy would be
-choosing what it is judged by. `aeos-gate.json` carries the secret-shape
-exemptions; `aeos-smoke.json` declares what the post-main rail runs against the
-merged commit, and rewriting it to a command that always succeeds would silently
-disarm that rail — leaving a check that still reports green while measuring
-nothing.
+choosing what it is judged by.
 
 A test asserts this list matches the set the gate actually enforces, because the
 documented set and the enforced set drift apart the moment either is spelled out
 twice.
+
+**These paths used to be decided by path alone** — one `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`
+verdict, no candidate byte read, and a queue in front of every workflow edit in
+the organization. They are now **judged**. A control-plane path enters the strict
+lane, where every ordinary floor still applies *and* these do:
+
+| Surface | Floor |
+| --- | --- |
+| `.github/workflows/**`, `.github/actions/**` | no `pull_request_target`; `permissions` declared and never `write-all`; every non-local `uses:` pinned to a 40-hex commit; no author-controlled free text or `secrets.*` interpolated into a `run:` body; no consumer repository publishing the reserved `aeos-merge-ready` path or check name |
+| `.github/aeos-gate.json` | valid schema; no blanket allowlist entry that would exempt the whole repository from secret-shape detection |
+| `.github/aeos-smoke.json` | valid schema; a declared `smoke_suites` / `compile_roots` may not be empty — a rail rewritten to run nothing still reports green |
+| `aeos/**` *(this repository only)* | parses; `merge_ready_gate.py` still declares its load-bearing constants, so the gate cannot lose one through an autonomous merge |
+
+The allowlist **never** exempts a control-plane path. That conjunct is what keeps
+the gate config a decision rather than a self-serve bypass, and it is now checked
+where it bites: a real credential shape inside a workflow, with an allowlist that
+covers it, is still a finding.
+
+Every workflow rule is calibrated against the organization's live population
+(measured 2026-09-03, all 20 workflows in `agent-toolkit` and this repository):
+zero `pull_request_target` triggers, zero undeclared `permissions`, zero unpinned
+third-party actions, zero secrets or author-controlled text in a `run:` body. The
+lane rejects what nobody is doing and permits everything that is.
+
+**Candidate code is never executed.** Workflow YAML is safe-loaded; candidate
+Python is read with `ast.parse`, which builds a syntax tree and runs nothing. And
+the judge is always the predecessor: these floors live in the trusted checkout
+resolved from the base commit, so a branch proposing a change to them is measured
+by the copy already on `main`.
+
+### The one residual human gate
+
+Deleting a control-plane path in **this** repository — the organization's own
+merge-control source — still fails with `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`.
+A deletion has no bytes, so no content floor can measure it, and this deletion
+reaches the gate that judges every repository in the organization. The same
+deletion in a consumer repository merges: the required verdict is injected there
+by the organization ruleset from a repository that branch cannot touch, and
+`.github/aeos-smoke.json` falling away restores the rail's built-in defaults —
+a stricter posture, not a weaker one.
+
+The anti-ratchet floor on `merge_ready_gate.py` is deliberately structural, not
+semantic: it catches a load-bearing declaration being deleted outright, which is
+what a weakening actually looks like in that file. Anything subtler still merges.
+That is a stated limit of this lane, not a claim it has none.
 
 ## Operator allowlist — `.github/aeos-gate.json` (optional)
 
@@ -114,16 +155,17 @@ its default branch:
   so a branch cannot make that address resolve to bytes of its own choosing. The
   candidate working tree is never consulted.
 - **The file is itself control plane** (see the set above). A pull request that
-  adds or edits it fails with `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`. An
-  exemption is an operator decision by construction — that conjunct is what
-  makes the allowlist a decision rather than a self-serve bypass.
+  adds or edits it goes through the strict lane: it must be valid, and it may not
+  carry a blanket entry (`*`, `**`, `**/*`, empty) that would exempt the whole
+  repository. Narrowness is what makes the allowlist a decision rather than a
+  self-serve bypass, and it is now enforced rather than asked for.
 - **Present but malformed fails closed** with `GATE_CONFIG_INVALID`. Invalid
   JSON, an unrecognised `schema_version`, or a `secret_shape_allowlist` that is
   not a list of non-empty strings will not silently degrade to "no exemptions".
   Unknown top-level keys are ignored so a newer declaration stays readable.
-- **It exempts the secret-shape check and nothing else.** Structured-data
-  parsing, the Python syntax floor, and the control-plane check all still apply
-  to an allowlisted path.
+- **It exempts the secret-shape check and nothing else**, and never on a
+  control-plane path. Structured-data parsing, the Python syntax floor, and the
+  strict lane all still apply to an allowlisted path.
 - Every suppression is listed in the job summary, so an exemption is visible
   rather than silent.
 
