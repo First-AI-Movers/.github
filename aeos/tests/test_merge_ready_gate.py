@@ -140,22 +140,105 @@ class GateTestCase(unittest.TestCase):
         self.assertEqual(report.scanned, 0)
 
     # -- control plane -----------------------------------------------------
-    def test_workflow_change_is_rejected(self) -> None:
-        self.repo.write(".github/workflows/ci.yml", "on: push\njobs: {}\n")
-        report = self.run_gate(self.repo.commit("add workflow"))
-        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
-        self.assertEqual(report.findings[0].path, ".github/workflows/ci.yml")
+    def test_compliant_workflow_change_is_measured_and_merges(self) -> None:
+        """The behaviour this plane replaces: a workflow edit used to be deferred
+        to a person by path alone. It is now judged, and a compliant one passes."""
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\n"
+            "permissions:\n  contents: read\n"
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: actions/checkout@" + "a" * 40 + "\n",
+        )
+        report = self.run_gate(self.repo.commit("add compliant workflow"))
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+        self.assertEqual(report.control_plane, [".github/workflows/ci.yml"])
 
-    def test_composite_action_change_is_rejected(self) -> None:
+    def test_privileged_trigger_fails_the_workflow_policy(self) -> None:
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on:\n  pull_request_target:\n"
+            "permissions:\n  contents: read\njobs: {}\n",
+        )
+        report = self.run_gate(self.repo.commit("privileged trigger"))
+        self.assertFailsWith(report, gate.WORKFLOW_POLICY_VIOLATION)
+
+    def test_unpinned_third_party_action_fails_the_workflow_policy(self) -> None:
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\npermissions:\n  contents: read\n"
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - uses: some/action@v4\n",
+        )
+        report = self.run_gate(self.repo.commit("floating tag"))
+        self.assertFailsWith(report, gate.WORKFLOW_POLICY_VIOLATION)
+
+    def test_script_injection_fails_the_workflow_policy(self) -> None:
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\npermissions:\n  contents: read\n"
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - run: echo ${{ github.event.pull_request.title }}\n",
+        )
+        report = self.run_gate(self.repo.commit("injection"))
+        self.assertFailsWith(report, gate.WORKFLOW_POLICY_VIOLATION)
+
+    def test_undeclared_permissions_fail_the_workflow_policy(self) -> None:
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps: []\n",
+        )
+        report = self.run_gate(self.repo.commit("no permissions"))
+        self.assertFailsWith(report, gate.WORKFLOW_POLICY_VIOLATION)
+
+    def test_a_consumer_may_not_publish_the_reserved_check_name(self) -> None:
+        """The twin-check hazard measured on agent-toolkit PR #3227."""
+        self.repo.write(
+            ".github/workflows/aeos-merge-ready.yml",
+            "on: pull_request\npermissions:\n  contents: read\n"
+            "jobs:\n  aeos-merge-ready:\n    runs-on: ubuntu-latest\n    steps: []\n",
+        )
+        report = self.run_gate(self.repo.commit("impersonate the org gate"))
+        self.assertFailsWith(report, gate.WORKFLOW_POLICY_VIOLATION)
+        details = " ".join(f.detail for f in report.findings)
+        self.assertIn("organization gate", details)
+        self.assertIn("reserved for the", details)
+
+    def test_the_policy_repository_itself_may_use_its_own_identity(self) -> None:
+        self.repo.write(
+            ".github/workflows/aeos-merge-ready.yml",
+            "on: pull_request\npermissions:\n  contents: read\n"
+            "jobs:\n  aeos-merge-ready:\n    runs-on: ubuntu-latest\n    steps: []\n",
+        )
+        report = self.run_gate(
+            self.repo.commit("the org gate itself"), repository="First-AI-Movers/.github"
+        )
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+
+    def test_compliant_composite_action_change_merges(self) -> None:
         self.repo.write(".github/actions/thing/action.yml", "runs:\n  using: node20\n")
         report = self.run_gate(self.repo.commit("add action"))
-        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
 
-    def test_workflow_deletion_is_also_control_plane(self) -> None:
+    def test_workflow_deletion_merges_in_a_consumer_repository(self) -> None:
+        """A deleted path has no bytes to judge. In a consumer repository the
+        deletion cannot reach the required verdict -- that is injected by the
+        organization ruleset from a repository this branch cannot touch."""
         self.repo.write(".github/workflows/ci.yml", "on: push\njobs: {}\n")
         self.repo.base = self.repo.commit("seed workflow")
         self.repo.remove(".github/workflows/ci.yml")
         report = self.run_gate(self.repo.commit("delete workflow"))
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+
+    def test_deleting_the_organizations_gate_source_stays_operator_governed(self) -> None:
+        """The one residual human gate: deleting the gate that judges all eight
+        repositories cannot be proven safe from candidate content there is none of."""
+        self.repo.write("aeos/merge_ready_gate.py", "CONTROL_PLANE_PREFIXES = ()\n")
+        self.repo.base = self.repo.commit("seed the gate source")
+        self.repo.remove("aeos/merge_ready_gate.py")
+        report = self.run_gate(
+            self.repo.commit("delete the gate"), repository="First-AI-Movers/.github"
+        )
         self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
 
     def test_other_dot_github_files_are_not_control_plane(self) -> None:
@@ -164,25 +247,58 @@ class GateTestCase(unittest.TestCase):
         report = self.run_gate(self.repo.commit("community health"))
         self.assertTrue(report.passed, [f.render() for f in report.findings])
 
-    def test_control_plane_short_circuits_before_reading_content(self) -> None:
-        """A workflow change is decided by path; no candidate byte is read."""
+    def test_control_plane_content_is_read_not_short_circuited(self) -> None:
+        """The inverse of the old behaviour, asserted deliberately: candidate
+        control-plane bytes ARE read now, and the ordinary floors still apply to
+        them. Unparseable workflow YAML is a finding, not a deferral."""
         self.repo.write(".github/workflows/ci.yml", "this: is: not: valid: yaml:\n")
         self.repo.write("broken.json", "{not json")
         report = self.run_gate(self.repo.commit("mixed"))
-        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
-        self.assertEqual(report.scanned, 0)
-        self.assertEqual({f.code for f in report.findings},
-                         {gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR})
-
-    def test_policy_repository_self_guards_its_own_gate_source(self) -> None:
-        self.repo.write("aeos/merge_ready_gate.py", "x = 1\n")
-        head = self.repo.commit("edit policy")
-        self.assertFailsWith(
-            self.run_gate(head, repository="First-AI-Movers/.github"),
-            gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR,
+        self.assertFalse(report.passed)
+        self.assertEqual(report.scanned, 2)
+        self.assertEqual(report.control_plane, [".github/workflows/ci.yml"])
+        codes = {f.code for f in report.findings}
+        # The lane's own "not readable YAML" verdict outranks the general
+        # structured floor in REASON_CODES, so it is the primary...
+        self.assertEqual(report.primary, gate.CONTROL_PLANE_PROOF_FAILED)
+        # ...but the ordinary floors still ran over BOTH files, which is the
+        # property that was unreachable while the control plane short-circuited.
+        self.assertIn(gate.STRUCTURED_DATA_UNPARSEABLE, codes)
+        self.assertEqual(
+            {f.path for f in report.findings if f.code == gate.STRUCTURED_DATA_UNPARSEABLE},
+            {".github/workflows/ci.yml", "broken.json"},
         )
+
+    def test_policy_repository_gate_source_keeps_its_load_bearing_declarations(self) -> None:
+        """The anti-ratchet floor. A gate edit that deletes a load-bearing
+        declaration cannot merge itself through; one that keeps them all can.
+
+        The judge is always the predecessor: this verdict comes from the copy of
+        the gate already on `main`, never from the candidate's."""
+        self.repo.write("aeos/merge_ready_gate.py", "x = 1\n")
+        gutted = self.repo.commit("gut the gate")
+        report = self.run_gate(gutted, repository="First-AI-Movers/.github")
+        self.assertFailsWith(report, gate.CONTROL_PLANE_PROOF_FAILED)
+        details = " ".join(f.detail for f in report.findings)
+        for name in ("CONTROL_PLANE_PREFIXES", "SECRET_SHAPES", "REASON_CODES"):
+            self.assertIn(name, details)
+
         # The same path in any other repository is ordinary source.
-        self.assertTrue(self.run_gate(head, repository="First-AI-Movers/other").passed)
+        self.assertTrue(self.run_gate(gutted, repository="First-AI-Movers/other").passed)
+
+    def test_policy_repository_gate_source_edit_that_keeps_them_merges(self) -> None:
+        self.repo.write(
+            "aeos/merge_ready_gate.py",
+            "CONTROL_PLANE_PREFIXES = ()\n"
+            "CONTROL_PLANE_PATHS = ()\n"
+            "SECRET_SHAPES = ()\n"
+            "REASON_CODES = ()\n"
+            "# an ordinary edit to the gate\n",
+        )
+        report = self.run_gate(
+            self.repo.commit("ordinary gate edit"), repository="First-AI-Movers/.github"
+        )
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
 
     # -- secret shapes -----------------------------------------------------
     def test_github_token_shape_is_caught(self) -> None:
@@ -532,37 +648,65 @@ class GateTestCase(unittest.TestCase):
         self.assertFailsWith(report, gate.SECRET_SHAPE_DETECTED)
         self.assertEqual(report.exempted, [])
 
-    def test_candidate_editing_the_gate_config_is_operator_governed(self) -> None:
-        self.repo.write(".github/aeos-gate.json", '{"schema_version": "1"}\n')
-        report = self.run_gate(self.repo.commit("self-serve exemption"))
-        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
-        self.assertEqual(report.findings[0].path, ".github/aeos-gate.json")
+    def test_a_valid_gate_config_edit_merges(self) -> None:
+        self.repo.write(
+            ".github/aeos-gate.json",
+            '{"schema_version": "1", "secret_shape_allowlist": ["tests/fixtures/**"]}\n',
+        )
+        report = self.run_gate(self.repo.commit("narrow, reasoned exemption"))
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
 
-    def test_candidate_editing_the_smoke_config_is_operator_governed(self) -> None:
-        """The post-main smoke definition decides what a merged commit is checked
-        against. A branch that can rewrite it can disarm its own rail."""
-        self.repo.write(".github/aeos-smoke.json",
-                        '{"schema_version": "1", "commands": [{"name": "noop", "run": "true"}]}\n')
-        report = self.run_gate(self.repo.commit("disarm the post-main rail"))
-        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
-        self.assertEqual(report.findings[0].path, ".github/aeos-smoke.json")
+    def test_a_blanket_allowlist_entry_fails_the_proof(self) -> None:
+        """The self-serve bypass this file exists to prevent: a wildcard entry
+        turns off secret detection for every file, permanently."""
+        for blanket in ("**", "*", "**/*", ""):
+            with self.subTest(pattern=blanket):
+                self.setUp()
+                self.repo.write(
+                    ".github/aeos-gate.json",
+                    '{"schema_version": "1", "secret_shape_allowlist": ["' + blanket + '"]}\n',
+                )
+                report = self.run_gate(self.repo.commit("blanket exemption"))
+                self.assertFailsWith(report, gate.CONTROL_PLANE_PROOF_FAILED)
 
-    def test_editing_an_existing_smoke_config_is_also_operator_governed(self) -> None:
-        self.repo.write(".github/aeos-smoke.json",
-                        '{"schema_version": "1", "commands": [{"name": "unit", "run": "make test"}]}\n')
-        self.repo.base = self.repo.commit("seed a real smoke")
-        self.repo.write(".github/aeos-smoke.json",
-                        '{"schema_version": "1", "commands": [{"name": "unit", "run": "true"}]}\n')
-        report = self.run_gate(self.repo.commit("quietly neuter it"))
-        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
+    def test_an_unparseable_gate_config_fails_the_proof(self) -> None:
+        self.repo.write(".github/aeos-gate.json", "{not json")
+        report = self.run_gate(self.repo.commit("broken config"))
+        self.assertFalse(report.passed)
 
-    def test_deleting_the_smoke_config_is_also_operator_governed(self) -> None:
-        self.repo.write(".github/aeos-smoke.json",
-                        '{"schema_version": "1", "commands": [{"name": "unit", "run": "make test"}]}\n')
+    def test_a_valid_smoke_config_edit_merges(self) -> None:
+        self.repo.write(
+            ".github/aeos-smoke.json",
+            '{"schema_version": "1", "smoke_suites": ["tests/"], "compile_roots": ["."]}\n',
+        )
+        report = self.run_gate(self.repo.commit("declare the rail"))
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+
+    def test_emptying_the_smoke_declaration_fails_the_proof(self) -> None:
+        """Rewritten to run nothing, the rail still reports green and now measures
+        nothing -- worse than a red one, because nobody looks at it again."""
+        for payload in (
+            '{"schema_version": "1", "smoke_suites": []}',
+            '{"schema_version": "1", "compile_roots": []}',
+            '{"schema_version": "1", "smoke_suites": ["", "  "]}',
+        ):
+            with self.subTest(payload=payload):
+                self.setUp()
+                self.repo.write(".github/aeos-smoke.json", payload + "\n")
+                report = self.run_gate(self.repo.commit("disarm the rail"))
+                self.assertFailsWith(report, gate.CONTROL_PLANE_PROOF_FAILED)
+
+    def test_deleting_the_smoke_config_restores_the_defaults_and_merges(self) -> None:
+        """Absence means the rail uses its built-in defaults -- a stricter posture,
+        not a weaker one -- so the deletion needs no human."""
+        self.repo.write(
+            ".github/aeos-smoke.json",
+            '{"schema_version": "1", "smoke_suites": ["tests/"]}\n',
+        )
         self.repo.base = self.repo.commit("seed a real smoke")
         self.repo.remove(".github/aeos-smoke.json")
         report = self.run_gate(self.repo.commit("delete it"))
-        self.assertFailsWith(report, gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR)
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
 
     def test_config_is_read_from_the_base_not_from_the_working_tree(self) -> None:
         """The load-bearing conjunct: a branch cannot supply its own exemptions."""
@@ -617,12 +761,29 @@ class GateTestCase(unittest.TestCase):
         )
 
     def test_allowlist_never_exempts_the_control_plane(self) -> None:
+        """The property survives the move to the strict lane, and is now checked
+        where it actually bites: a real credential shape inside a workflow, with
+        an allowlist that covers it, is still a finding. Under the old
+        short-circuit this was never exercised -- no workflow byte was read."""
         self.seed_gate_config({"schema_version": "1", "secret_shape_allowlist": ["**"]})
-        self.repo.write(".github/workflows/ci.yml", "on: push\njobs: {}\n")
-        self.assertFailsWith(
-            self.run_gate(self.repo.commit("workflow")),
-            gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR,
+        self.repo.write(
+            ".github/workflows/ci.yml",
+            "on: push\npermissions:\n  contents: read\n"
+            "jobs:\n  build:\n    runs-on: ubuntu-latest\n"
+            "    steps:\n      - run: echo " + self.LEAK + "\n",
         )
+        report = self.run_gate(self.repo.commit("workflow"))
+        self.assertFailsWith(report, gate.SECRET_SHAPE_DETECTED)
+        self.assertEqual(report.exempted, [])
+
+        # Negative control: the SAME allowlist DOES exempt an ordinary path, so
+        # the assertion above is about the control plane, not a broken allowlist.
+        self.setUp()
+        self.seed_gate_config({"schema_version": "1", "secret_shape_allowlist": ["**"]})
+        self.repo.write("app/fixture.py", "TOKEN = '" + self.LEAK + "'\n")
+        ordinary = self.run_gate(self.repo.commit("ordinary path"))
+        self.assertTrue(ordinary.passed, [f.render() for f in ordinary.findings])
+        self.assertTrue(ordinary.exempted)
 
     def test_glob_semantics_are_fnmatch_plus_the_documented_extension(self) -> None:
         match = gate.path_matches_glob
