@@ -16,7 +16,7 @@
   ],
   "derivation_policy": {
     "generation": "first-party import closure of `roots` under scripts/ (whole AST, lazy imports included, package __init__.py included), intersected with the allowlist; regenerated at the candidate's merge base on every evaluation and refused as DERIVATION_POLICY_DRIFT when it differs from `members`, and regenerated at the candidate head so that a newly added, newly imported allowlisted helper is protected in the same change. Manifest entries carry SHA-256 image digests and a protected-diff digest, never git object ids; `fingerprint` must be the SHA-256 fingerprint of `public_key`",
-    "measured_at_revision": "<merged main sha, regenerated at open time>",
+    "measured_at_revision": "d5cc4d8318a577ac6fad08a2946b9b83b033cae8",
     "measured_full_closure_count": 275,
     "roots": [
       "scripts/agent_relay/standing_authority.py",
