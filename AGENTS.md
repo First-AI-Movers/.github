@@ -66,8 +66,9 @@ conjunct** (`aeos/derivation_policy.py`, decided by
 bytes the gate already read, against an allowed-signers file written from trusted
 policy into a private temporary directory), reads the wall clock once to decide
 signer expiry, and reads one committed data file, `aeos/standing-governor-policy.json`,
-whose member list the gate regenerates from the candidate's base commit on every
-evaluation and refuses as drift when it differs. Nothing in it executes candidate
+whose member list the gate regenerates from the candidate's base and head commits on
+every evaluation and refuses as drift when it differs, and whose pinned signer
+fingerprint it binds to the pinned public key. Nothing in it executes candidate
 bytes. Editing that data file is a control-plane change like any other file under
 `aeos/`: judged by the predecessor, never by the candidate.
 

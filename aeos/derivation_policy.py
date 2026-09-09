@@ -22,18 +22,29 @@ lazy in-function import counts; package ``__init__.py`` modules count because
 they execute on import), intersected with an explicit allowlist. The gate
 regenerates that set from the *base* commit on every evaluation and refuses when
 the committed list has drifted, so the list is never stale and never hand-kept.
+The gate regenerates the same closure at the *candidate head* as well, and the
+set a candidate must sign is the union: a helper the candidate adds under the
+allowlist and imports from a root enters the protected set in the same change,
+so the operator's signature covers the whole effective validator change, not
+only the files that were protected before the candidate existed.
 
-The signed manifest binds the trusted base SHA and one entry per protected path
-whose identity differs between base and head: status ``added`` / ``modified`` /
-``deleted`` / ``renamed``, the pre-image blob id (or ``absent``), the post-image
-blob id (or ``absent``), and both paths for a rename. It never binds the head
-SHA, which would depend on the manifest itself. The manifest and its signature are
-excluded from the diff they describe.
+The signed manifest binds the trusted base SHA, one entry per protected path
+whose identity differs between base and head -- status ``added`` / ``modified`` /
+``deleted`` / ``renamed``, the SHA-256 of the pre-image bytes at the base (or
+``absent``), the SHA-256 of the post-image bytes at the head (or ``absent``), and
+both paths for a rename -- and the canonical protected-diff digest, the SHA-256
+of those entries' canonical serialization. It never binds the head SHA, which
+would depend on the manifest itself, and it never uses git object ids, which are
+a statement about where bytes sit rather than what they are. The manifest and
+its signature are excluded from the diff they describe.
 
 Trust model, restated for this conjunct
 ---------------------------------------
 * Policy (signer, namespace, roots, allowlist, member list) is read from THIS
-  checkout, never from the candidate.
+  checkout, never from the candidate. A signer entry is accepted only when its
+  pinned ``fingerprint`` is the SHA-256 fingerprint of its ``public_key``: the
+  human-reviewed fingerprint is the boundary, and a public key that does not
+  produce it invalidates the policy rather than silently replacing the signer.
 * Candidate Python is parsed with :mod:`ast`; nothing in it runs.
 * ``ssh-keygen -Y verify`` is the one subprocess beyond ``git`` this repository
   permits, invoked with argv only, over a manifest the gate already read and a
@@ -46,7 +57,10 @@ Trust model, restated for this conjunct
 from __future__ import annotations
 
 import ast
+import base64
+import binascii
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
@@ -87,6 +101,29 @@ _HEX40 = re.compile(r"[0-9a-f]{40}")
 _FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 _LABEL_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 _PUBKEY_RE = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+$")
+
+
+def fingerprint_of(public_key: str) -> str:
+    """The OpenSSH SHA-256 fingerprint of an ``<type> <base64>`` public key line --
+    the same value ``ssh-keygen -lf`` prints -- computed here so that the pinned
+    fingerprint can be bound to the key the verifier trusts without trusting the
+    candidate or a second tool. Raises ``ValueError`` when the key blob is not
+    well-formed base64 whose leading length-prefixed string names the key type."""
+    parts = public_key.split()
+    if len(parts) != 2:
+        raise ValueError("public key must be '<type> <base64>'")
+    key_type, encoded = parts
+    try:
+        blob = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"public key blob is not base64: {exc}") from exc
+    if len(blob) < 4:
+        raise ValueError("public key blob is truncated")
+    length = int.from_bytes(blob[:4], "big")
+    if blob[4 : 4 + length] != key_type.encode("ascii"):
+        raise ValueError("public key blob does not name its declared key type")
+    digest = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
+    return "SHA256:" + digest
 
 
 class PolicyError(Exception):
@@ -191,6 +228,17 @@ def parse_policy(raw: bytes) -> Policy:
                 signer["public_key"]
             ):
                 raise ValueError(f"signer {label}: public_key must be '<type> <base64>'")
+            try:
+                computed = fingerprint_of(signer["public_key"])
+            except ValueError as exc:
+                raise ValueError(f"signer {label}: public_key is malformed: {exc}") from exc
+            if computed != signer["fingerprint"]:
+                # The pinned fingerprint is the reviewed boundary; a key that does
+                # not produce it must not become the trusted verifier key.
+                raise ValueError(
+                    f"signer {label}: fingerprint {signer['fingerprint']} is not the "
+                    f"fingerprint of public_key ({computed})"
+                )
             signer["not_after"] = _parse_not_after(signer.get("not_after"), label)
         policy = document.get("derivation_policy")
         if not isinstance(policy, dict):
@@ -408,31 +456,49 @@ def regenerate_closure(candidate_dir: str, commit: str, policy: Policy) -> tuple
 # Protected diff from the merge base, rename-aware
 # --------------------------------------------------------------------------
 class Entry:
-    __slots__ = ("path", "status", "pre_blob", "post_blob", "rename_from")
+    """One protected path whose identity differs between base and head. The image
+    fields are SHA-256 hex digests of the file bytes (never git object ids) or
+    ``absent``."""
 
-    def __init__(self, path: str, status: str, pre_blob: str, post_blob: str, rename_from: str | None) -> None:
+    __slots__ = ("path", "status", "pre_sha256", "post_sha256", "rename_from")
+
+    def __init__(
+        self, path: str, status: str, pre_sha256: str, post_sha256: str, rename_from: str | None
+    ) -> None:
         self.path = path
         self.status = status
-        self.pre_blob = pre_blob
-        self.post_blob = post_blob
+        self.pre_sha256 = pre_sha256
+        self.post_sha256 = post_sha256
         self.rename_from = rename_from
 
     def as_dict(self) -> dict:
         record = {
             "path": self.path,
             "status": self.status,
-            "pre_blob": self.pre_blob,
-            "post_blob": self.post_blob,
+            "pre_sha256": self.pre_sha256,
+            "post_sha256": self.post_sha256,
         }
         if self.rename_from is not None:
             record["rename_from"] = self.rename_from
         return record
 
 
-def protected_diff(candidate_dir: str, base: str, head: str, policy: Policy) -> tuple[list[Entry], list[str]]:
-    """Every change between ``base`` and ``head`` that touches a protected path,
-    with pre- and post-image blob ids and rename detection. Returns the entries and
-    the list of all changed paths (for the inert pre-check)."""
+class _Change:
+    """One raw ``git diff`` record: status letter, old and new path, and the
+    pre/post git object ids (used only to read the bytes that are then hashed)."""
+
+    __slots__ = ("code", "old", "new", "pre_blob", "post_blob")
+
+    def __init__(self, code: str, old: str, new: str, pre_blob: str, post_blob: str) -> None:
+        self.code = code
+        self.old = old
+        self.new = new
+        self.pre_blob = pre_blob
+        self.post_blob = post_blob
+
+
+def raw_diff(candidate_dir: str, base: str, head: str) -> list[_Change]:
+    """Every change between ``base`` and ``head``, rename-aware, as data."""
     out = _git(
         candidate_dir,
         ["diff", "--no-ext-diff", "--no-textconv", "-M", "--raw", "--abbrev=40", "-z", _hex(base, "base"), _hex(head, "head")],
@@ -440,8 +506,7 @@ def protected_diff(candidate_dir: str, base: str, head: str, policy: Policy) -> 
     fields = out.split(b"\0")
     if fields and fields[-1] == b"":
         fields.pop()
-    entries: list[Entry] = []
-    touched: list[str] = []
+    changes: list[_Change] = []
     index = 0
     while index < len(fields):
         meta = fields[index].decode("utf-8", "replace")
@@ -465,32 +530,86 @@ def protected_diff(candidate_dir: str, base: str, head: str, policy: Policy) -> 
             index += 2
         for p in {old, new}:
             _safe_relpath(p, "changed path")
-        touched.extend({old, new})
+        if code not in ("A", "D", "M", "T", "R", "C"):
+            raise PolicyError(EVIDENCE_UNREADABLE, new, f"git diff emitted an unknown status {status!r}")
         pre = src_sha if src_sha.strip("0") else ABSENT
         post = dst_sha if dst_sha.strip("0") else ABSENT
-        if code == "A":
-            if policy.protects(new):
-                entries.append(Entry(new, "added", ABSENT, post, None))
-        elif code == "D":
-            if policy.protects(old):
-                entries.append(Entry(old, "deleted", pre, ABSENT, None))
-        elif code == "M" or code == "T":
-            if policy.protects(new):
-                entries.append(Entry(new, "modified", pre, post, None))
-        elif code == "R":
-            if policy.protects(old) or policy.protects(new):
-                entries.append(Entry(new, "renamed", pre, post, old))
-        elif code == "C":
-            if policy.protects(new):
-                entries.append(Entry(new, "added", ABSENT, post, None))
-        else:
-            raise PolicyError(EVIDENCE_UNREADABLE, new, f"git diff emitted an unknown status {status!r}")
+        changes.append(_Change(code, old, new, pre, post))
+    return changes
+
+
+def touched_paths(changes: list[_Change]) -> list[str]:
+    seen: list[str] = []
+    for change in changes:
+        for p in (change.old, change.new):
+            if p not in seen:
+                seen.append(p)
+    return seen
+
+
+def _select(changes: list[_Change], protects) -> list[tuple[_Change, Entry]]:
+    selected: list[tuple[_Change, Entry]] = []
+    for c in changes:
+        if c.code == "A" or c.code == "C":
+            if protects(c.new):
+                selected.append((c, Entry(c.new, "added", ABSENT, "", None)))
+        elif c.code == "D":
+            if protects(c.old):
+                selected.append((c, Entry(c.old, "deleted", "", ABSENT, None)))
+        elif c.code == "M" or c.code == "T":
+            if protects(c.new):
+                selected.append((c, Entry(c.new, "modified", "", "", None)))
+        elif c.code == "R":
+            if protects(c.old) or protects(c.new):
+                selected.append((c, Entry(c.new, "renamed", "", "", c.old)))
+    return selected
+
+
+def _hash_images(candidate_dir: str, selected: list[tuple[_Change, Entry]]) -> list[Entry]:
+    """Fill every non-absent image with the SHA-256 of the exact file bytes."""
+    wanted = sorted(
+        {c.pre_blob for c, e in selected if e.pre_sha256 != ABSENT}
+        | {c.post_blob for c, e in selected if e.post_sha256 != ABSENT}
+    )
+    blobs = read_blobs(candidate_dir, wanted)
+    entries: list[Entry] = []
+    for change, entry in selected:
+        for attr, blob in (("pre_sha256", change.pre_blob), ("post_sha256", change.post_blob)):
+            if getattr(entry, attr) == ABSENT:
+                continue
+            data = blobs.get(blob)
+            if data is None:
+                raise PolicyError(EVIDENCE_UNREADABLE, entry.path, f"image {blob[:12]} could not be read")
+            setattr(entry, attr, hashlib.sha256(data).hexdigest())
+        entries.append(entry)
     entries.sort(key=lambda e: e.path)
-    return entries, touched
+    return entries
+
+
+def protected_diff(
+    candidate_dir: str, base: str, head: str, protected, changes: list[_Change] | None = None
+) -> tuple[list[Entry], list[str]]:
+    """Every change between ``base`` and ``head`` that touches a protected path,
+    with SHA-256 pre- and post-image digests and rename detection. ``protected`` is
+    a :class:`Policy` (its committed members) or an explicit collection of paths.
+    Returns the entries and the list of all changed paths."""
+    if changes is None:
+        changes = raw_diff(candidate_dir, base, head)
+    protects = protected.protects if isinstance(protected, Policy) else (lambda p: p in protected)
+    entries = _hash_images(candidate_dir, _select(changes, protects))
+    return entries, touched_paths(changes)
+
+
+def protected_diff_digest(entries: list[Entry]) -> str:
+    """The canonical protected-diff digest: SHA-256 over the entries' canonical
+    serialization (sorted by path, sorted keys, no whitespace)."""
+    canonical = json.dumps([e.as_dict() for e in entries], sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def canonical_manifest(repository: str, base: str, entries: list[Entry]) -> bytes:
-    """The exact bytes the operator signs and the gate recomputes. The head SHA is
+    """The exact bytes the operator signs and the gate recomputes: the trusted base
+    SHA, the entries, and the canonical protected-diff digest. The head SHA is
     deliberately absent: it would depend on the manifest committed on that head."""
     document = {
         "schema": MANIFEST_SCHEMA,
@@ -498,8 +617,41 @@ def canonical_manifest(repository: str, base: str, entries: list[Entry]) -> byte
         "base_sha": base,
         "namespace": SIGNATURE_NAMESPACE,
         "entries": [e.as_dict() for e in entries],
+        "protected_diff_sha256": protected_diff_digest(entries),
     }
     return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def candidate_protected_set(
+    candidate_dir: str, base: str, head: str, policy: Policy
+) -> tuple[frozenset[str], tuple[str, str, str] | None]:
+    """The set of paths a candidate must sign: the committed members, the closure
+    regenerated at the merge base, and the closure regenerated at the head (so a
+    helper the candidate adds and imports is protected in the same change).
+    Returns ``(protected, drift_finding)``; the drift finding is set when the
+    committed list differs from the base closure."""
+    _full, at_base = regenerate_closure(candidate_dir, base, policy)
+    drift = None
+    if at_base != policy.members:
+        missing = sorted(at_base - policy.members)[:6]
+        extra = sorted(policy.members - at_base)[:6]
+        drift = (
+            DERIVATION_POLICY_DRIFT,
+            POLICY_FILE,
+            "committed member list differs from the closure regenerated at "
+            f"{base[:12]} (not committed: {missing}; no longer in closure: {extra})",
+        )
+    _full, at_head = regenerate_closure(candidate_dir, head, policy)
+    return frozenset(policy.members | at_base | at_head), drift
+
+
+def expected_manifest(candidate_dir: str, repository: str, base_sha: str, head_sha: str, policy: Policy) -> bytes:
+    """The manifest bytes the gate will require for this candidate -- what an
+    implementation lane prints for the operator to sign off-node."""
+    base = merge_base(candidate_dir, base_sha, head_sha)
+    protected, _drift = candidate_protected_set(candidate_dir, base, head_sha, policy)
+    entries, _touched = protected_diff(candidate_dir, base, head_sha, protected)
+    return canonical_manifest(repository, base, entries)
 
 
 # --------------------------------------------------------------------------
@@ -563,27 +715,21 @@ def evaluate_derivation_policy(
         return []
 
     base = merge_base(candidate_dir, base_sha, head_sha)
-    entries, touched = protected_diff(candidate_dir, base, head_sha, policy)
+    changes = raw_diff(candidate_dir, base, head_sha)
+    touched = touched_paths(changes)
     interesting = [p for p in touched if policy.protects(p) or policy.in_allowlist(p)]
-    if not interesting and not entries:
+    if not interesting:
         return []  # inert: the candidate touches nothing near the protected set
 
     findings: list[tuple[str, str, str]] = []
 
-    # Drift: the committed member list must equal the closure regenerated at the
-    # merge base. A stale list would protect the wrong files.
-    _full, regenerated = regenerate_closure(candidate_dir, base, policy)
-    if regenerated != policy.members:
-        missing = sorted(regenerated - policy.members)[:6]
-        extra = sorted(policy.members - regenerated)[:6]
-        findings.append(
-            (
-                DERIVATION_POLICY_DRIFT,
-                POLICY_FILE,
-                "committed member list differs from the closure regenerated at "
-                f"{base[:12]} (not committed: {missing}; no longer in closure: {extra})",
-            )
-        )
+    # The protected set for THIS candidate: committed members (drift-checked
+    # against the closure at the merge base) plus the closure at the head, so a
+    # newly added, newly imported allowlisted helper is signed in the same change.
+    protected, drift = candidate_protected_set(candidate_dir, base, head_sha, policy)
+    if drift is not None:
+        findings.append(drift)
+    entries, _touched = protected_diff(candidate_dir, base, head_sha, protected, changes)
     if not entries:
         return findings  # allowlisted-but-unprotected change: no signature needed
 

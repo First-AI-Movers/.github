@@ -9,6 +9,7 @@ is exactly the tool the gate needs.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -193,9 +194,7 @@ class DerivationPolicyTestCase(unittest.TestCase):
     def manifest_for(self, head: str, private: str | None = None, sign_it: bool = True) -> bytes:
         """Compute the canonical manifest for the working tree's protected changes
         relative to the base and commit it (and its signature) onto the head."""
-        base = dp.merge_base(self.repo.root, self.repo.base, head)
-        entries, _ = dp.protected_diff(self.repo.root, base, head, self.policy())
-        manifest = dp.canonical_manifest(TARGET, base, entries)
+        manifest = dp.expected_manifest(self.repo.root, TARGET, self.repo.base, head, self.policy())
         self.repo.write_bytes(dp.MANIFEST_PATH, manifest)
         if sign_it:
             self.repo.write_bytes(dp.SIGNATURE_PATH, sign(private or self.private, manifest))
@@ -274,9 +273,9 @@ class DerivationPolicyTestCase(unittest.TestCase):
         self.assertEqual(statuses[Repo.ROOT], "modified")
         rename = [e for e in json.loads(manifest)["entries"] if e["status"] == "renamed"][0]
         self.assertEqual(rename["rename_from"], "scripts/agent_relay/models.py")
-        self.assertNotEqual(rename["pre_blob"], dp.ABSENT)
+        self.assertNotEqual(rename["pre_sha256"], dp.ABSENT)
         deleted = [e for e in json.loads(manifest)["entries"] if e["status"] == "deleted"][0]
-        self.assertEqual(deleted["post_blob"], dp.ABSENT)
+        self.assertEqual(deleted["post_sha256"], dp.ABSENT)
 
     def repo_root_source_importing(self, extra: str) -> str:
         return (
@@ -336,9 +335,7 @@ class DerivationPolicyTestCase(unittest.TestCase):
     def test_signature_in_the_wrong_namespace_is_refused(self) -> None:
         self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
         head = self.repo.commit("modify protected")
-        base = dp.merge_base(self.repo.root, self.repo.base, head)
-        entries, _ = dp.protected_diff(self.repo.root, base, head, self.policy())
-        manifest = dp.canonical_manifest(TARGET, base, entries)
+        manifest = dp.expected_manifest(self.repo.root, TARGET, self.repo.base, head, self.policy())
         self.repo.write_bytes(dp.MANIFEST_PATH, manifest)
         self.repo.write_bytes(dp.SIGNATURE_PATH, sign(self.private, manifest, namespace="at-standing-ceiling"))
         head = self.repo.commit("sign in another namespace")
@@ -427,6 +424,158 @@ class DerivationPolicyTestCase(unittest.TestCase):
         with self.assertRaises(dp.PolicyError):
             dp.parse_policy(json.dumps(document).encode())
 
+    # -- signer identity: the pinned fingerprint is bound to the trusted key ------
+    def test_fingerprint_of_matches_ssh_keygen_for_every_accepted_key_type(self) -> None:
+        # Positive control: the pure-Python fingerprint is the value ssh-keygen prints.
+        self.assertEqual(dp.fingerprint_of(self.public), self.fingerprint)
+        for key_type, extra in (("ecdsa", ["-b", "256"]), ("rsa", ["-b", "2048"])):
+            private = os.path.join(self.keys, key_type)
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", key_type, *extra, "-N", "", "-f", private],
+                check=True, capture_output=True,
+            )
+            with open(private + ".pub", encoding="utf-8") as handle:
+                parts = handle.read().split()
+            expected = subprocess.run(
+                ["ssh-keygen", "-lf", private + ".pub"], check=True, capture_output=True, text=True
+            ).stdout.split()[1]
+            self.assertEqual(dp.fingerprint_of(f"{parts[0]} {parts[1]}"), expected)
+
+    def test_signer_whose_fingerprint_is_not_its_public_keys_is_refused(self) -> None:
+        # RC0 finding 1: fingerprint of key A, public key B, signed by B was accepted.
+        other_private, other_public, _other_fingerprint = keygen(self.keys, "other")
+        self.write_policy(not_after=FAR_FUTURE, public=other_public, fingerprint=self.fingerprint)
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        with self.assertRaises(dp.PolicyError) as ctx:
+            dp.load_policy(self.policy_dir)
+        self.assertEqual(ctx.exception.code, dp.GATE_CONFIG_INVALID)
+        self.assertIn("is not the fingerprint of public_key", ctx.exception.detail)
+        # A manifest signed by the key that IS in public_key is still refused, and the
+        # gate reports the typed policy defect rather than a PASS.
+        manifest = dp.canonical_manifest(TARGET, self.repo.base, [])
+        self.repo.write_bytes(dp.MANIFEST_PATH, manifest)
+        self.repo.write_bytes(dp.SIGNATURE_PATH, sign(other_private, manifest))
+        head = self.repo.commit("sign with the unbound key")
+        report = gate.evaluate(
+            candidate_dir=self.repo.root, repository=TARGET, base_sha=self.repo.base,
+            head_sha=head, event_name="pull_request", policy_dir=self.policy_dir,
+        )
+        self.assertFalse(report.passed)
+        self.assertIn(gate.GATE_CONFIG_INVALID, {f.code for f in report.findings})
+
+    def test_public_key_blob_that_does_not_name_its_type_is_refused(self) -> None:
+        import base64
+
+        forged = "ssh-ed25519 " + base64.b64encode(b"\x00\x00\x00\x07ssh-rsa" + b"\x01" * 32).decode()
+        with self.assertRaises(ValueError):
+            dp.fingerprint_of(forged)
+        document = self.policy_document(not_after=FAR_FUTURE, public=forged)
+        with self.assertRaises(dp.PolicyError) as ctx:
+            dp.parse_policy(json.dumps(document).encode())
+        self.assertIn("malformed", ctx.exception.detail)
+
+    # -- the protected set follows the candidate's own closure ---------------------
+    def test_newly_imported_allowlisted_helper_must_be_in_the_manifest(self) -> None:
+        # RC0 finding 2: a root-only manifest was accepted for a change that also
+        # added scripts/agent_relay/new_validator.py and imported it from the root.
+        self.repo.write("scripts/agent_relay/new_validator.py", "def widen():\n    return True\n")
+        self.repo.write(Repo.ROOT, self.repo_root_source_importing("agent_relay.new_validator"))
+        head = self.repo.commit("add a helper and import it from a root")
+        base = dp.merge_base(self.repo.root, self.repo.base, head)
+        # The committed members alone (the pre-repair protected set) miss the helper.
+        root_only, _ = dp.protected_diff(self.repo.root, base, head, self.policy())
+        self.assertEqual([e.path for e in root_only], [Repo.ROOT])
+        partial = dp.canonical_manifest(TARGET, base, root_only)
+        self.repo.write_bytes(dp.MANIFEST_PATH, partial)
+        self.repo.write_bytes(dp.SIGNATURE_PATH, sign(self.private, partial))
+        head = self.repo.commit("sign the root-only manifest")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_MANIFEST_INCOMPLETE])
+        self.assertIn("added:scripts/agent_relay/new_validator.py", findings[0][2])
+        # The complete manifest covers the helper with its post-image digest and passes.
+        manifest = self.manifest_for(head)
+        head = self.repo.commit("sign the complete manifest")
+        self.assertEqual(self.evaluate(head), [])
+        entries = {e["path"]: e for e in json.loads(manifest)["entries"]}
+        self.assertEqual(set(entries), {Repo.ROOT, "scripts/agent_relay/new_validator.py"})
+        helper = entries["scripts/agent_relay/new_validator.py"]
+        self.assertEqual(helper["status"], "added")
+        self.assertEqual(helper["pre_sha256"], dp.ABSENT)
+        self.assertEqual(helper["post_sha256"], hashlib.sha256(b"def widen():\n    return True\n").hexdigest())
+
+    def test_newly_imported_helper_outside_the_allowlist_stays_ordinary_code(self) -> None:
+        # Contrast control for the previous test: the same shape outside the allowlist
+        # is the ADR's accepted residual, so only the root edit needs the signature.
+        self.repo.write("scripts/helpers/extra.py", "W = 4\n")
+        self.repo.write(Repo.ROOT, self.repo_root_source_importing("helpers.extra"))
+        head = self.repo.commit("import a non-allowlisted helper")
+        manifest = self.manifest_for(head)
+        head = self.repo.commit("sign")
+        self.assertEqual(self.evaluate(head), [])
+        self.assertEqual([e["path"] for e in json.loads(manifest)["entries"]], [Repo.ROOT])
+
+    def test_added_allowlisted_file_that_no_root_imports_is_not_protected(self) -> None:
+        # Being under the allowlist is not being in the closure: an orphan needs no signature.
+        self.repo.write("scripts/agent_relay/orphan.py", "ORPHAN = True\n")
+        head = self.repo.commit("add an orphan under the allowlist")
+        self.assertEqual(self.evaluate(head), [])
+
+    def test_deleting_a_declared_root_is_drift_at_the_head(self) -> None:
+        self.repo.remove(Repo.ROOT)
+        head = self.repo.commit("delete a root")
+        report = gate.evaluate(
+            candidate_dir=self.repo.root, repository=TARGET, base_sha=self.repo.base,
+            head_sha=head, event_name="pull_request", policy_dir=self.policy_dir,
+        )
+        self.assertFalse(report.passed)
+        self.assertIn(gate.DERIVATION_POLICY_DRIFT, {f.code for f in report.findings})
+
+    # -- the manifest representation is the ADR's: SHA-256 images and a diff digest --
+    def test_manifest_carries_sha256_images_and_the_protected_diff_digest(self) -> None:
+        # RC0 finding 3: the manifest recorded git object ids, not SHA-256 image digests.
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        manifest = self.manifest_for(head)
+        document = json.loads(manifest)
+        [entry] = document["entries"]
+        self.assertEqual(entry["pre_sha256"], hashlib.sha256(b"X = 1\n").hexdigest())
+        self.assertEqual(entry["post_sha256"], hashlib.sha256(b"X = 2\n").hexdigest())
+        self.assertNotIn("pre_blob", entry)
+        blob_id = git(self.repo.root, "rev-parse", f"{head}:scripts/agent_relay/models.py")
+        self.assertNotIn(blob_id, manifest.decode())
+        canonical_entries = json.dumps(document["entries"], sort_keys=True, separators=(",", ":"))
+        self.assertEqual(
+            document["protected_diff_sha256"], hashlib.sha256(canonical_entries.encode()).hexdigest()
+        )
+        head = self.repo.commit("sign")
+        self.assertEqual(self.evaluate(head), [])
+
+    def test_manifest_with_git_object_ids_or_a_wrong_digest_is_incomplete(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        expected = json.loads(self.manifest_for(head))
+        # (a) the pre-repair representation: git object ids under the old field names
+        legacy = dict(expected)
+        legacy["entries"] = [
+            {
+                "path": e["path"], "status": e["status"],
+                "pre_blob": git(self.repo.root, "rev-parse", f"{self.repo.base}:{e['path']}"),
+                "post_blob": git(self.repo.root, "rev-parse", f"{head}:{e['path']}"),
+            }
+            for e in expected["entries"]
+        ]
+        legacy.pop("protected_diff_sha256")
+        # (b) the right entries with a tampered digest
+        tampered = dict(expected)
+        tampered["protected_diff_sha256"] = "0" * 64
+        for variant in (legacy, tampered):
+            raw = (json.dumps(variant, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            self.repo.write_bytes(dp.MANIFEST_PATH, raw)
+            self.repo.write_bytes(dp.SIGNATURE_PATH, sign(self.private, raw))
+            head = self.repo.commit("sign a non-canonical manifest")
+            self.assertEqual(self.codes(self.evaluate(head)), [dp.DERIVATION_POLICY_MANIFEST_INCOMPLETE])
+
     # -- composition into the gate -------------------------------------------------
     def test_gate_reports_the_typed_reason_and_keeps_every_other_floor(self) -> None:
         self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
@@ -473,6 +622,11 @@ class DerivationPolicyTestCase(unittest.TestCase):
         self.assertTrue(policy.members)
         self.assertTrue(all(policy.in_allowlist(m) for m in policy.members))
         self.assertTrue(set(policy.roots) <= policy.members)
+        [signer] = policy.signers
+        self.assertEqual(dp.fingerprint_of(signer.public_key), signer.fingerprint)
+        # The operator's value (#1951 comment 5601714921), taken verbatim: not inferred here.
+        self.assertEqual(signer.not_after, dp._parse_not_after("2026-12-08T00:00:00Z", LABEL))
+        self.assertLess(signer.not_after, dp._parse_not_after("2026-12-08T00:00:01Z", LABEL))
 
 
 if __name__ == "__main__":  # pragma: no cover

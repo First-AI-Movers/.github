@@ -181,35 +181,47 @@ operator signature.
   on import), intersected with `allowlist_prefixes` + `allowlist_files`. The gate
   regenerates that set from the **base** commit on every evaluation, with trusted code
   parsing candidate Python as data, and refuses `DERIVATION_POLICY_DRIFT` when the
-  committed list differs. The list is never hand-kept.
+  committed list differs. The list is never hand-kept. The gate regenerates the same
+  closure at the **candidate head** too, and the set the candidate must sign is the union:
+  a helper added under the allowlist and imported from a root is protected in the same
+  change, so the signature covers the whole effective validator change. A file under the
+  allowlist that no root imports is ordinary code; so is a newly imported helper outside
+  the allowlist (the ADR's accepted residual).
 - **Signed diff.** A candidate whose merge-base→head diff (rename-aware) touches a member
   must carry `aeos/derivation-policy-manifest.json` and `aeos/derivation-policy-manifest.sig`
   on its head. The manifest is the canonical representation of the protected diff — the
-  trusted base SHA, the repository, the namespace, and one entry per changed protected path
-  with `status` ∈ {`added`,`modified`,`deleted`,`renamed`}, `pre_blob` / `post_blob` (or
-  `absent`), and `rename_from` — serialized with sorted keys and no whitespace. It never
-  binds the head SHA (which would depend on the manifest itself), and the manifest and
-  signature are excluded from the diff they describe. The gate recomputes those bytes and
-  requires byte equality, so a deleted validator cannot vanish from the manifest and a
-  renamed one cannot escape it.
+  trusted base SHA, the repository, the namespace, one entry per changed protected path
+  with `status` ∈ {`added`,`modified`,`deleted`,`renamed`}, `pre_sha256` / `post_sha256`
+  (the SHA-256 of the file bytes at the base / head, or `absent`; never a git object id)
+  and `rename_from`, and `protected_diff_sha256`, the SHA-256 of the entries' canonical
+  serialization — all serialized with sorted keys and no whitespace. It never binds the
+  head SHA (which would depend on the manifest itself), and the manifest and signature are
+  excluded from the diff they describe. The gate recomputes those bytes and requires byte
+  equality, so a deleted validator cannot vanish from the manifest and a renamed one cannot
+  escape it.
 - **Signer.** The signature is `ssh-keygen -Y sign -n at-derivation-policy` by a key whose
   public half is pinned in `accepted_signers` (label, fingerprint, public key, `not_after`).
-  Verification is `ssh-keygen -Y verify` against an allowed-signers file the gate writes
-  from that trusted data — never from the candidate. A signer whose `not_after` is `null`
-  is **not active** and every protected diff is refused; an expired signer is stale;
-  removing the entry is the durable revocation.
+  The pinned `fingerprint` **must be** the SHA-256 fingerprint of `public_key` (the value
+  `ssh-keygen -lf` prints); the gate computes it from the key and refuses the whole policy
+  as `GATE_CONFIG_INVALID` on a mismatch, so the reviewed fingerprint is the boundary and a
+  key that does not produce it can never become the trusted verifier key. Verification is
+  `ssh-keygen -Y verify` against an allowed-signers file the gate writes from that trusted
+  data — never from the candidate. A signer whose `not_after` is `null` is **not active**
+  and every protected diff is refused; an expired signer is stale; removing the entry is
+  the durable revocation.
 - **Reason codes.** `DERIVATION_POLICY_DIFF_UNSIGNED` (no manifest/signature, unpinned key,
   wrong namespace, inactive or expired signer); `DERIVATION_POLICY_MANIFEST_INCOMPLETE`
-  (manifest bytes are not the canonical protected diff — a missing deletion or rename entry
-  lands here); `DERIVATION_POLICY_DRIFT` (committed member list differs from the regenerated
-  closure, or a declared root is absent); an unreadable policy document is
-  `GATE_CONFIG_INVALID`.
+  (manifest bytes are not the canonical protected diff — a missing deletion, rename or
+  newly-imported-helper entry, a git-object-id representation or a wrong digest lands
+  here); `DERIVATION_POLICY_DRIFT` (committed member list differs from the regenerated
+  closure, or a declared root is absent at the base or the head); an unreadable or
+  self-inconsistent policy document is `GATE_CONFIG_INVALID`.
 - **Judge.** The policy document lives beside the gate in this repository, so a candidate
   that ships its own copy, or its own key, is judged by the trusted one. Changing the policy
   document here is an `aeos/**` control-plane change judged by the predecessor.
 
-The exact protected-diff bytes an operator signs are printed by the tests' helper
-(`canonical_manifest`); an implementation lane posts them, the operator signs off-node.
+The exact bytes an operator signs for a candidate are `derivation_policy.expected_manifest(...)`
+— what the gate will recompute; an implementation lane posts them, the operator signs off-node.
 
 ## Operator allowlist — `.github/aeos-gate.json` (optional)
 

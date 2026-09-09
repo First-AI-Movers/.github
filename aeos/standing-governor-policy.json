@@ -1,6 +1,6 @@
 {
   "schema": "aeos-standing-governor-policy/v1",
-  "decision": "ADR:standing-governor-continuity-authority \u00a7D2 / \u00a7D15 Tier 1 item 1 (First-AI-Movers/agent-toolkit, Accepted 2026-09-09); #1951 operator decision 5600051094 item 2; signer acts 5600873374 / 5600885006",
+  "decision": "ADR:standing-governor-continuity-authority \u00a7D2 / \u00a7D15 Tier 1 item 1 (First-AI-Movers/agent-toolkit, Accepted 2026-09-09); #1951 operator decision 5600051094 item 2; signer acts 5600873374 / 5600885006 / 5601714921",
   "target_repository": "First-AI-Movers/agent-toolkit",
   "namespace": "at-derivation-policy",
   "manifest_path": "aeos/derivation-policy-manifest.json",
@@ -10,11 +10,12 @@
       "label": "aeos-standing-governor",
       "fingerprint": "SHA256:6hDoxgBrGjNcIZ2jITd+Y1yO/UPqh38BAgx4gHekEgY",
       "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM3H5eC4TQNp7T4KbBrU4iEQ2QHQhZvbZUy6tiuA0yb0",
-      "not_after": null
+      "not_after": "2026-12-08T00:00:00Z",
+      "not_after_source": "#1951 operator act 5601714921 (2026-09-09T12:19:24Z), relayed on #3700 5602572743; no tighter canonical signer TTL exists at ADR main (ceilings <=14 d and launch grants <=24 h are separate objects), so the value is taken verbatim"
     }
   ],
   "derivation_policy": {
-    "generation": "first-party import closure of `roots` under scripts/ at the candidate's merge base (whole AST, lazy imports included, package __init__.py included), intersected with the allowlist; regenerated on every evaluation and refused as DERIVATION_POLICY_DRIFT when it differs from `members`",
+    "generation": "first-party import closure of `roots` under scripts/ (whole AST, lazy imports included, package __init__.py included), intersected with the allowlist; regenerated at the candidate's merge base on every evaluation and refused as DERIVATION_POLICY_DRIFT when it differs from `members`, and regenerated at the candidate head so that a newly added, newly imported allowlisted helper is protected in the same change. Manifest entries carry SHA-256 image digests and a protected-diff digest, never git object ids; `fingerprint` must be the SHA-256 fingerprint of `public_key`",
     "measured_at_revision": "1de99485e4b4a595320c400348812b4418181f38",
     "measured_full_closure_count": 268,
     "roots": [
