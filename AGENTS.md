@@ -59,6 +59,18 @@ Everything under `aeos/` is pure stdlib plus a YAML safe loader: no network, no
 clock, no subprocess beyond `git`, no filesystem writes. A change that needs any
 of those is almost certainly in the wrong place.
 
+**One narrow, documented accommodation — the standing-governor derivation-policy
+conjunct** (`aeos/derivation_policy.py`, decided by
+`ADR:standing-governor-continuity-authority` in `agent-toolkit` and authorized by
+#1951 decision 5600051094 item 2): it runs `ssh-keygen -Y verify` (argv only, over
+bytes the gate already read, against an allowed-signers file written from trusted
+policy into a private temporary directory), reads the wall clock once to decide
+signer expiry, and reads one committed data file, `aeos/standing-governor-policy.json`,
+whose member list the gate regenerates from the candidate's base commit on every
+evaluation and refuses as drift when it differs. Nothing in it executes candidate
+bytes. Editing that data file is a control-plane change like any other file under
+`aeos/`: judged by the predecessor, never by the candidate.
+
 **Adding a rule to the workflow policy carries two obligations.** Give it a
 violation that must fire *and* a near-miss that must stay silent — a policy that
 only ever says "no" is a wall, not a floor. And measure it against the live

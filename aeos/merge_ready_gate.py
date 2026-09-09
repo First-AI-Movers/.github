@@ -53,6 +53,7 @@ from control_plane_proof import (  # noqa: E402
     evaluate_control_plane_deletion,
     evaluate_control_plane_file,
 )
+import derivation_policy  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Closed reason-code vocabulary. Nothing outside this tuple is ever emitted.
@@ -63,6 +64,9 @@ WORKFLOW_POLICY_VIOLATION = "WORKFLOW_POLICY_VIOLATION"
 SECRET_SHAPE_DETECTED = "SECRET_SHAPE_DETECTED"
 STRUCTURED_DATA_UNPARSEABLE = "STRUCTURED_DATA_UNPARSEABLE"
 SYNTAX_ERROR = "SYNTAX_ERROR"
+DERIVATION_POLICY_DIFF_UNSIGNED = derivation_policy.DERIVATION_POLICY_DIFF_UNSIGNED
+DERIVATION_POLICY_MANIFEST_INCOMPLETE = derivation_policy.DERIVATION_POLICY_MANIFEST_INCOMPLETE
+DERIVATION_POLICY_DRIFT = derivation_policy.DERIVATION_POLICY_DRIFT
 EVIDENCE_UNREADABLE = "EVIDENCE_UNREADABLE"
 BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
 GATE_CONFIG_INVALID = "GATE_CONFIG_INVALID"
@@ -72,6 +76,9 @@ REASON_CODES = (
     GATE_CONFIG_INVALID,
     CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR,
     CONTROL_PLANE_PROOF_FAILED,
+    DERIVATION_POLICY_DIFF_UNSIGNED,
+    DERIVATION_POLICY_MANIFEST_INCOMPLETE,
+    DERIVATION_POLICY_DRIFT,
     WORKFLOW_POLICY_VIOLATION,
     BUDGET_EXCEEDED,
     SECRET_SHAPE_DETECTED,
@@ -850,9 +857,15 @@ def evaluate(
     hard_budget: float = DEFAULT_HARD_BUDGET_SECONDS,
     soft_budget: float = DEFAULT_SOFT_BUDGET_SECONDS,
     clock=time.monotonic,
+    policy_dir: str | None = None,
+    now=time.time,
 ) -> Report:
     started = clock()
     report = Report()
+    # The standing-governor derivation policy is trusted data beside this module.
+    # A caller may point at another directory (the tests do); the candidate never can.
+    if policy_dir is None:
+        policy_dir = os.path.dirname(os.path.abspath(__file__))
 
     def elapsed() -> float:
         return clock() - started
@@ -869,6 +882,21 @@ def evaluate(
         return report
     except Exception as exc:  # noqa: BLE001 - see _abort
         return _abort(report, elapsed(), "resolving the changed set", exc)
+
+    # Standing-governor derivation policy (ADR:standing-governor-continuity-authority
+    # §D2 / §D15 Tier 1 item 1). Inert unless the candidate is the policy's target
+    # repository and touches a protected or allowlisted path; every refusal is typed.
+    try:
+        report.findings.extend(
+            Finding(code, path, detail)
+            for code, path, detail in derivation_policy.evaluate_derivation_policy(
+                candidate_dir, repository, base_sha, head_sha, policy_dir, now=now
+            )
+        )
+    except derivation_policy.PolicyError as exc:
+        report.findings.append(Finding(exc.code, exc.path, exc.detail))
+    except Exception as exc:  # noqa: BLE001 - see _abort
+        return _abort(report, elapsed(), "evaluating the derivation policy", exc)
 
     # A control-plane path no longer short-circuits to a human verdict. It enters
     # the STRICT lane instead (#3311): the candidate's bytes are measured against

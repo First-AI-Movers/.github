@@ -1,0 +1,479 @@
+#!/usr/bin/env python3
+"""Focused, deterministic tests for the standing-governor derivation-policy conjunct.
+
+Plain ``unittest``. Every fixture is a throwaway git repository and a throwaway
+ed25519 key generated here; no literal credential or real key material is
+committed. ``ssh-keygen`` is the one tool beyond ``git`` these tests need, which
+is exactly the tool the gate needs.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import derivation_policy as dp  # noqa: E402
+import merge_ready_gate as gate  # noqa: E402
+
+GIT_ENV = {
+    **os.environ,
+    "GIT_CONFIG_GLOBAL": os.devnull,
+    "GIT_CONFIG_SYSTEM": os.devnull,
+    "GIT_AUTHOR_NAME": "aeos-test",
+    "GIT_AUTHOR_EMAIL": "aeos-test@example.invalid",
+    "GIT_COMMITTER_NAME": "aeos-test",
+    "GIT_COMMITTER_EMAIL": "aeos-test@example.invalid",
+    "GIT_TERMINAL_PROMPT": "0",
+}
+
+TARGET = "First-AI-Movers/agent-toolkit"
+LABEL = "aeos-standing-governor"
+FAR_FUTURE = "2999-01-01T00:00:00Z"
+PAST = "2000-01-01T00:00:00Z"
+
+
+def git(repo: str, *args: str) -> str:
+    proc = subprocess.run(["git", "-C", repo, *args], capture_output=True, check=True, env=GIT_ENV)
+    return proc.stdout.decode().strip()
+
+
+def keygen(directory: str, name: str) -> tuple[str, str, str]:
+    """A throwaway ed25519 key: (private path, public key line, fingerprint)."""
+    private = os.path.join(directory, name)
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", private],
+        check=True, capture_output=True,
+    )
+    with open(private + ".pub", encoding="utf-8") as handle:
+        parts = handle.read().split()
+    public = f"{parts[0]} {parts[1]}"
+    fingerprint = subprocess.run(
+        ["ssh-keygen", "-lf", private + ".pub"], check=True, capture_output=True, text=True
+    ).stdout.split()[1]
+    return private, public, fingerprint
+
+
+def sign(private: str, manifest: bytes, namespace: str = dp.SIGNATURE_NAMESPACE) -> bytes:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "manifest.json")
+        with open(path, "wb") as handle:
+            handle.write(manifest)
+        subprocess.run(
+            ["ssh-keygen", "-Y", "sign", "-f", private, "-n", namespace, path],
+            check=True, capture_output=True,
+        )
+        with open(path + ".sig", "rb") as handle:
+            return handle.read()
+
+
+class Repo:
+    """A candidate repository with a tiny first-party module graph under scripts/."""
+
+    ROOT = "scripts/agent_relay/standing_authority.py"
+
+    def __init__(self, root: str) -> None:
+        self.root = root
+        git(root, "init", "-q", "-b", "main")
+        # The graph: the root imports a sibling absolutely, a package by relative
+        # import inside a function (lazy), a from-import that names a submodule,
+        # and a non-allowlisted helper. Package inits execute on import.
+        self.write("scripts/agent_relay/__init__.py", "")
+        self.write(
+            self.ROOT,
+            "import agent_relay.models\n"
+            "from commission_train import authority\n"
+            "def lazy():\n"
+            "    from .validate import check  # noqa\n"
+            "    import helpers.util\n",
+        )
+        self.write("scripts/agent_relay/models.py", "X = 1\n")
+        self.write("scripts/agent_relay/validate.py", "def check():\n    return True\n")
+        self.write("scripts/agent_relay/unrelated.py", "Y = 2\n")
+        self.write("scripts/commission_train/__init__.py", "")
+        self.write("scripts/commission_train/authority.py", "def check_chain(s):\n    return s\n")
+        self.write("scripts/helpers/__init__.py", "")
+        self.write("scripts/helpers/util.py", "Z = 3\n")
+        self.write("docs/notes.md", "prose\n")
+        self.base = self.commit("base")
+
+    def write(self, rel: str, content: str) -> None:
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+
+    def write_bytes(self, rel: str, content: bytes) -> None:
+        path = os.path.join(self.root, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(content)
+
+    def remove(self, rel: str) -> None:
+        os.unlink(os.path.join(self.root, rel))
+
+    def move(self, src: str, dst: str) -> None:
+        path = os.path.join(self.root, dst)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.rename(os.path.join(self.root, src), path)
+
+    def commit(self, message: str) -> str:
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "--allow-empty", "-m", message)
+        return git(self.root, "rev-parse", "HEAD")
+
+
+EXPECTED_FULL = {
+    "scripts/agent_relay/standing_authority.py",
+    "scripts/agent_relay/__init__.py",
+    "scripts/agent_relay/models.py",
+    "scripts/agent_relay/validate.py",
+    "scripts/commission_train/__init__.py",
+    "scripts/commission_train/authority.py",
+    "scripts/helpers/__init__.py",
+    "scripts/helpers/util.py",
+}
+EXPECTED_BOUNDED = {p for p in EXPECTED_FULL if not p.startswith("scripts/helpers/")}
+
+
+class DerivationPolicyTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        os.makedirs(os.path.join(self._tmp.name, "candidate"), exist_ok=True)
+        self.repo = Repo(os.path.join(self._tmp.name, "candidate"))
+        self.keys = os.path.join(self._tmp.name, "keys")
+        os.makedirs(self.keys)
+        self.private, self.public, self.fingerprint = keygen(self.keys, "operator")
+        self.policy_dir = os.path.join(self._tmp.name, "policy")
+        os.makedirs(self.policy_dir)
+        self.write_policy(not_after=FAR_FUTURE)
+
+    # -- fixture helpers ----------------------------------------------------
+    def policy_document(self, *, not_after, members=None, public=None, fingerprint=None) -> dict:
+        return {
+            "schema": dp.POLICY_SCHEMA,
+            "target_repository": TARGET,
+            "accepted_signers": [
+                {
+                    "label": LABEL,
+                    "fingerprint": fingerprint or self.fingerprint,
+                    "public_key": public or self.public,
+                    "not_after": not_after,
+                }
+            ],
+            "derivation_policy": {
+                "roots": [Repo.ROOT],
+                "allowlist_prefixes": ["scripts/agent_relay/", "scripts/commission_train/"],
+                "allowlist_files": [],
+                "members": sorted(EXPECTED_BOUNDED if members is None else members),
+            },
+        }
+
+    def write_policy(self, **kwargs) -> None:
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(self.policy_document(**kwargs), handle)
+
+    def policy(self) -> dp.Policy:
+        return dp.load_policy(self.policy_dir)
+
+    def evaluate(self, head: str, repository: str = TARGET, now=None):
+        kwargs = {}
+        if now is not None:
+            kwargs["now"] = now
+        return dp.evaluate_derivation_policy(
+            self.repo.root, repository, self.repo.base, head, self.policy_dir, **kwargs
+        )
+
+    def manifest_for(self, head: str, private: str | None = None, sign_it: bool = True) -> bytes:
+        """Compute the canonical manifest for the working tree's protected changes
+        relative to the base and commit it (and its signature) onto the head."""
+        base = dp.merge_base(self.repo.root, self.repo.base, head)
+        entries, _ = dp.protected_diff(self.repo.root, base, head, self.policy())
+        manifest = dp.canonical_manifest(TARGET, base, entries)
+        self.repo.write_bytes(dp.MANIFEST_PATH, manifest)
+        if sign_it:
+            self.repo.write_bytes(dp.SIGNATURE_PATH, sign(private or self.private, manifest))
+        return manifest
+
+    def codes(self, findings) -> list[str]:
+        return [code for code, _path, _detail in findings]
+
+    # -- closure regeneration --------------------------------------------------
+    def test_closure_follows_absolute_relative_lazy_and_submodule_imports_with_package_inits(self) -> None:
+        full, bounded = dp.regenerate_closure(self.repo.root, self.repo.base, self.policy())
+        self.assertEqual(full, EXPECTED_FULL)
+        self.assertEqual(bounded, EXPECTED_BOUNDED)
+        self.assertNotIn("scripts/agent_relay/unrelated.py", full)
+
+    def test_missing_root_is_drift_not_silence(self) -> None:
+        self.write_policy(not_after=FAR_FUTURE)
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), encoding="utf-8") as handle:
+            document = json.load(handle)
+        document["derivation_policy"]["roots"] = ["scripts/agent_relay/absent.py"]
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        with self.assertRaises(dp.PolicyError) as ctx:
+            dp.regenerate_closure(self.repo.root, self.repo.base, self.policy())
+        self.assertEqual(ctx.exception.code, dp.DERIVATION_POLICY_DRIFT)
+
+    # -- inert cases ----------------------------------------------------------
+    def test_other_repository_is_inert(self) -> None:
+        self.repo.write(Repo.ROOT, "WIDENED = True\n")
+        head = self.repo.commit("touch protected in another repo")
+        self.assertEqual(self.evaluate(head, repository="First-AI-Movers/other"), [])
+
+    def test_unprotected_change_is_inert(self) -> None:
+        self.repo.write("docs/notes.md", "more prose\n")
+        self.repo.write("scripts/helpers/util.py", "Z = 4\n")  # in the closure, outside the allowlist
+        head = self.repo.commit("unprotected")
+        self.assertEqual(self.evaluate(head), [])
+
+    def test_allowlisted_but_unprotected_change_needs_no_signature(self) -> None:
+        self.repo.write("scripts/agent_relay/unrelated.py", "Y = 3\n")
+        head = self.repo.commit("allowlisted non-member")
+        self.assertEqual(self.evaluate(head), [])
+
+    def test_no_policy_file_means_no_conjunct(self) -> None:
+        os.unlink(os.path.join(self.policy_dir, dp.POLICY_FILE))
+        self.repo.write(Repo.ROOT, "WIDENED = True\n")
+        head = self.repo.commit("touch protected")
+        self.assertEqual(self.evaluate(head), [])
+
+    # -- the signed matrix ------------------------------------------------------
+    def test_signed_modification_passes(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        manifest = self.manifest_for(head)
+        head = self.repo.commit("sign")
+        self.assertEqual(self.evaluate(head), [])
+        document = json.loads(manifest)
+        self.assertEqual([e["status"] for e in document["entries"]], ["modified"])
+        self.assertNotIn(head, manifest.decode())
+        self.assertNotIn("head", document)
+
+    def test_signed_addition_deletion_and_rename_pass(self) -> None:
+        self.repo.write("scripts/commission_train/derivation.py", "def derive_child():\n    return None\n")
+        self.repo.write(Repo.ROOT, self.repo_root_source_importing("commission_train.derivation"))
+        self.repo.remove("scripts/agent_relay/validate.py")
+        self.repo.move("scripts/agent_relay/models.py", "scripts/agent_relay/models_v2.py")
+        head = self.repo.commit("add, delete, rename")
+        # The policy's member list must match the closure at the merge base, which
+        # is unchanged by the head, so the committed list is still current.
+        manifest = self.manifest_for(head)
+        head = self.repo.commit("sign")
+        self.assertEqual(self.evaluate(head), [])
+        statuses = {e["path"]: e["status"] for e in json.loads(manifest)["entries"]}
+        self.assertEqual(statuses["scripts/agent_relay/validate.py"], "deleted")
+        self.assertEqual(statuses["scripts/agent_relay/models_v2.py"], "renamed")
+        self.assertEqual(statuses[Repo.ROOT], "modified")
+        rename = [e for e in json.loads(manifest)["entries"] if e["status"] == "renamed"][0]
+        self.assertEqual(rename["rename_from"], "scripts/agent_relay/models.py")
+        self.assertNotEqual(rename["pre_blob"], dp.ABSENT)
+        deleted = [e for e in json.loads(manifest)["entries"] if e["status"] == "deleted"][0]
+        self.assertEqual(deleted["post_blob"], dp.ABSENT)
+
+    def repo_root_source_importing(self, extra: str) -> str:
+        return (
+            "import agent_relay.models\n"
+            "from commission_train import authority\n"
+            f"import {extra}\n"
+            "def lazy():\n"
+            "    from .validate import check  # noqa\n"
+            "    import helpers.util\n"
+        )
+
+    # -- negatives ----------------------------------------------------------------
+    def test_unsigned_protected_modification_is_refused(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected, no manifest")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn("no signed manifest", findings[0][2])
+
+    def test_manifest_that_omits_a_deletion_is_incomplete(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        self.repo.remove("scripts/agent_relay/validate.py")
+        head = self.repo.commit("modify and delete")
+        base = dp.merge_base(self.repo.root, self.repo.base, head)
+        entries, _ = dp.protected_diff(self.repo.root, base, head, self.policy())
+        partial = [e for e in entries if e.status != "deleted"]
+        manifest = dp.canonical_manifest(TARGET, base, partial)
+        self.repo.write_bytes(dp.MANIFEST_PATH, manifest)
+        self.repo.write_bytes(dp.SIGNATURE_PATH, sign(self.private, manifest))
+        head = self.repo.commit("sign a manifest without the deletion")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_MANIFEST_INCOMPLETE])
+        self.assertIn("deleted:scripts/agent_relay/validate.py", findings[0][2])
+
+    def test_rename_to_an_unlisted_path_cannot_escape(self) -> None:
+        self.repo.move("scripts/agent_relay/models.py", "scripts/agent_relay/renamed_models.py")
+        head = self.repo.commit("rename protected away")
+        base = dp.merge_base(self.repo.root, self.repo.base, head)
+        manifest = dp.canonical_manifest(TARGET, base, [])  # claims nothing protected changed
+        self.repo.write_bytes(dp.MANIFEST_PATH, manifest)
+        self.repo.write_bytes(dp.SIGNATURE_PATH, sign(self.private, manifest))
+        head = self.repo.commit("sign an empty manifest")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_MANIFEST_INCOMPLETE])
+        self.assertIn("renamed:scripts/agent_relay/renamed_models.py", findings[0][2])
+
+    def test_signature_by_an_unpinned_key_is_refused(self) -> None:
+        other, _pub, _fp = keygen(self.keys, "impostor")
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        self.manifest_for(head, private=other)
+        head = self.repo.commit("sign with an unpinned key")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn("does not verify", findings[0][2])
+
+    def test_signature_in_the_wrong_namespace_is_refused(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        base = dp.merge_base(self.repo.root, self.repo.base, head)
+        entries, _ = dp.protected_diff(self.repo.root, base, head, self.policy())
+        manifest = dp.canonical_manifest(TARGET, base, entries)
+        self.repo.write_bytes(dp.MANIFEST_PATH, manifest)
+        self.repo.write_bytes(dp.SIGNATURE_PATH, sign(self.private, manifest, namespace="at-standing-ceiling"))
+        head = self.repo.commit("sign in another namespace")
+        self.assertEqual(self.codes(self.evaluate(head)), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+
+    def test_expired_signer_is_stale(self) -> None:
+        self.write_policy(not_after=PAST)
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        self.manifest_for(head)
+        head = self.repo.commit("sign")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn("expired", findings[0][2])
+
+    def test_inactive_signer_entry_fails_closed(self) -> None:
+        self.write_policy(not_after=None)
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        self.manifest_for(head)
+        head = self.repo.commit("sign")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn("not active", findings[0][2])
+
+    def test_expiry_is_decided_at_evaluation_time(self) -> None:
+        self.write_policy(not_after="2030-01-01T00:00:00Z")
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        self.manifest_for(head)
+        head = self.repo.commit("sign")
+        self.assertEqual(self.evaluate(head, now=lambda: 1.0e9), [])
+        self.assertEqual(self.codes(self.evaluate(head, now=lambda: 4.0e9)), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+
+    def test_stale_member_list_is_drift(self) -> None:
+        self.write_policy(not_after=FAR_FUTURE, members=EXPECTED_BOUNDED - {"scripts/agent_relay/validate.py"})
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected under a stale list")
+        self.manifest_for(head)
+        head = self.repo.commit("sign")
+        findings = self.evaluate(head)
+        self.assertIn(dp.DERIVATION_POLICY_DRIFT, self.codes(findings))
+        self.assertIn("scripts/agent_relay/validate.py", findings[0][2])
+
+    def test_candidate_cannot_redefine_its_own_judge(self) -> None:
+        """A candidate that ships its own policy file and pins its own key gets
+        judged by the trusted policy directory, never by its own bytes."""
+        impostor, pub, fp = keygen(self.keys, "impostor")
+        self.repo.write(
+            "aeos/standing-governor-policy.json",
+            json.dumps(self.policy_document(not_after=FAR_FUTURE, public=pub, fingerprint=fp)),
+        )
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("ship a forged policy")
+        self.manifest_for(head, private=impostor)
+        head = self.repo.commit("sign with the impostor key")
+        self.assertEqual(self.codes(self.evaluate(head)), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+
+    def test_manifest_and_signature_are_not_protected_paths(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        manifest = self.manifest_for(head)
+        entries = json.loads(manifest)["entries"]
+        self.assertEqual([e["path"] for e in entries], ["scripts/agent_relay/models.py"])
+        head = self.repo.commit("sign")
+        # Re-signing on a later head changes only the manifest files: still clean.
+        manifest2 = self.manifest_for(head)
+        self.assertEqual(manifest, manifest2)
+
+    # -- policy document validation ----------------------------------------------
+    def test_invalid_policy_is_gate_config_invalid(self) -> None:
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
+            handle.write('{"schema": "wrong"}')
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify")
+        with self.assertRaises(dp.PolicyError) as ctx:
+            self.evaluate(head)
+        self.assertEqual(ctx.exception.code, dp.GATE_CONFIG_INVALID)
+
+    def test_policy_rejects_unsorted_members_and_bad_fingerprint(self) -> None:
+        document = self.policy_document(not_after=FAR_FUTURE)
+        document["derivation_policy"]["members"] = list(reversed(document["derivation_policy"]["members"]))
+        with self.assertRaises(dp.PolicyError):
+            dp.parse_policy(json.dumps(document).encode())
+        document = self.policy_document(not_after=FAR_FUTURE, fingerprint="SHA256:short")
+        with self.assertRaises(dp.PolicyError):
+            dp.parse_policy(json.dumps(document).encode())
+
+    # -- composition into the gate -------------------------------------------------
+    def test_gate_reports_the_typed_reason_and_keeps_every_other_floor(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        self.repo.write("broken.json", "{not json")
+        head = self.repo.commit("unsigned protected change plus a broken config")
+        report = gate.evaluate(
+            candidate_dir=self.repo.root, repository=TARGET, base_sha=self.repo.base,
+            head_sha=head, event_name="pull_request", policy_dir=self.policy_dir,
+        )
+        self.assertFalse(report.passed)
+        codes = {f.code for f in report.findings}
+        self.assertIn(gate.DERIVATION_POLICY_DIFF_UNSIGNED, codes)
+        self.assertIn(gate.STRUCTURED_DATA_UNPARSEABLE, codes)
+        self.assertIn(gate.DERIVATION_POLICY_DIFF_UNSIGNED, gate.REASON_CODES)
+        rendered = gate.render(report, TARGET, "pull_request", self.repo.base, head)
+        self.assertIn("DERIVATION_POLICY_DIFF_UNSIGNED", rendered)
+
+    def test_gate_passes_a_signed_protected_change(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        self.manifest_for(head)
+        head = self.repo.commit("sign")
+        report = gate.evaluate(
+            candidate_dir=self.repo.root, repository=TARGET, base_sha=self.repo.base,
+            head_sha=head, event_name="pull_request", policy_dir=self.policy_dir,
+        )
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+
+    def test_gate_without_a_policy_directory_entry_is_unchanged_for_other_repositories(self) -> None:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify")
+        report = gate.evaluate(
+            candidate_dir=self.repo.root, repository="First-AI-Movers/other", base_sha=self.repo.base,
+            head_sha=head, event_name="pull_request", policy_dir=self.policy_dir,
+        )
+        self.assertTrue(report.passed, [f.render() for f in report.findings])
+
+    def test_shipped_policy_file_is_valid_and_targets_the_toolkit(self) -> None:
+        shipped = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        policy = dp.load_policy(shipped)
+        self.assertIsNotNone(policy)
+        self.assertEqual(policy.target_repository, TARGET.lower())
+        self.assertEqual([s.label for s in policy.signers], [LABEL])
+        self.assertTrue(policy.members)
+        self.assertTrue(all(policy.in_allowlist(m) for m in policy.members))
+        self.assertTrue(set(policy.roots) <= policy.members)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    unittest.main()
