@@ -160,6 +160,75 @@ semantic: it catches a load-bearing declaration being deleted outright, which is
 what a weakening actually looks like in that file. Anything subtler still merges.
 That is a stated limit of this lane, not a claim it has none.
 
+## The standing-governor derivation policy — a scoped signed-diff conjunct
+
+Decided by `ADR:standing-governor-continuity-authority` (`First-AI-Movers/agent-toolkit`,
+Accepted 2026-09-09) §D2 and §D15 Tier 1 item 1; authorized by #1951 operator decision
+5600051094 item 2. Implemented by `aeos/derivation_policy.py`; declared by
+`aeos/standing-governor-policy.json`. **Inert for every repository except the policy's
+`target_repository`, and inert for every candidate there that touches no protected or
+allowlisted path.** Ordinary behaviour outside that exact conjunct is unchanged.
+
+Why it exists: on a Development Cell the node's GitHub credential is the operator's own,
+so a resident process could widen the modules that read its own authority — the ceiling
+parser, the narrowing chain, the deriver, the admission and replay enforcers — through an
+ordinary auto-squashed pull request. This conjunct makes that require an off-node
+operator signature.
+
+- **Protected set.** `derivation_policy.members` is a *generated, bounded* list: the
+  first-party import closure of `derivation_policy.roots` under `scripts/` (whole AST, so a
+  lazy in-function import counts; package `__init__.py` modules count because they execute
+  on import), intersected with `allowlist_prefixes` + `allowlist_files`. The gate
+  regenerates that set from the **base** commit on every evaluation, with trusted code
+  parsing candidate Python as data, and refuses `DERIVATION_POLICY_DRIFT` when the
+  committed list differs. The list is never hand-edited, but it is **committed here and
+  refreshed by an ordinary PR**: after a signed protected change that alters the closure
+  merges in the target repository, every later candidate there that touches a protected
+  or allowlisted path is refused `DERIVATION_POLICY_DRIFT` until `members` is regenerated
+  (`derivation_policy.regenerate_closure(<clone>, <main sha>, policy)[1]`, sorted) and
+  committed in this repository; the lane that signs such a change owns that follow-up.
+  The gate regenerates the same
+  closure at the **candidate head** too, and the set the candidate must sign is the union:
+  a helper added under the allowlist and imported from a root is protected in the same
+  change, so the signature covers the whole effective validator change. A file under the
+  allowlist that no root imports is ordinary code; so is a newly imported helper outside
+  the allowlist (the ADR's accepted residual).
+- **Signed diff.** A candidate whose merge-base→head diff (rename-aware) touches a member
+  must carry `aeos/derivation-policy-manifest.json` and `aeos/derivation-policy-manifest.sig`
+  on its head. The manifest is the canonical representation of the protected diff — the
+  trusted base SHA, the repository, the namespace, one entry per changed protected path
+  with `status` ∈ {`added`,`modified`,`deleted`,`renamed`}, `pre_sha256` / `post_sha256`
+  (the SHA-256 of the file bytes at the base / head, or `absent`; never a git object id)
+  and `rename_from`, and `protected_diff_sha256`, the SHA-256 of the entries' canonical
+  serialization — all serialized with sorted keys and no whitespace. It never binds the
+  head SHA (which would depend on the manifest itself), and the manifest and signature are
+  excluded from the diff they describe. The gate recomputes those bytes and requires byte
+  equality, so a deleted validator cannot vanish from the manifest and a renamed one cannot
+  escape it.
+- **Signer.** The signature is `ssh-keygen -Y sign -n at-derivation-policy` by a key whose
+  public half is pinned in `accepted_signers` (label, fingerprint, public key, `not_after`).
+  The pinned `fingerprint` **must be** the SHA-256 fingerprint of `public_key` (the value
+  `ssh-keygen -lf` prints); the gate computes it from the key and refuses the whole policy
+  as `GATE_CONFIG_INVALID` on a mismatch, so the reviewed fingerprint is the boundary and a
+  key that does not produce it can never become the trusted verifier key. Verification is
+  `ssh-keygen -Y verify` against an allowed-signers file the gate writes from that trusted
+  data — never from the candidate. A signer whose `not_after` is `null` is **not active**
+  and every protected diff is refused; an expired signer is stale; removing the entry is
+  the durable revocation.
+- **Reason codes.** `DERIVATION_POLICY_DIFF_UNSIGNED` (no manifest/signature, unpinned key,
+  wrong namespace, inactive or expired signer); `DERIVATION_POLICY_MANIFEST_INCOMPLETE`
+  (manifest bytes are not the canonical protected diff — a missing deletion, rename or
+  newly-imported-helper entry, a git-object-id representation or a wrong digest lands
+  here); `DERIVATION_POLICY_DRIFT` (committed member list differs from the regenerated
+  closure, or a declared root is absent at the base or the head); an unreadable or
+  self-inconsistent policy document is `GATE_CONFIG_INVALID`.
+- **Judge.** The policy document lives beside the gate in this repository, so a candidate
+  that ships its own copy, or its own key, is judged by the trusted one. Changing the policy
+  document here is an `aeos/**` control-plane change judged by the predecessor.
+
+The exact bytes an operator signs for a candidate are `derivation_policy.expected_manifest(...)`
+— what the gate will recompute; an implementation lane posts them, the operator signs off-node.
+
 ## Operator allowlist — `.github/aeos-gate.json` (optional)
 
 Some repositories deliberately commit credential-shaped literals as verified
