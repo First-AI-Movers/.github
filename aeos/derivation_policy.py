@@ -214,6 +214,12 @@ def parse_policy(raw: bytes) -> Policy:
         signers = document.get("accepted_signers")
         if not isinstance(signers, list) or not signers:
             raise ValueError("accepted_signers must be a non-empty list")
+        labels = [s.get("label") for s in signers if isinstance(s, dict)]
+        if len(labels) != len(set(labels)):
+            # ssh-keygen -I <principal> accepts any allowed-signers line sharing the
+            # label, so a rotated (expired) key under a reused label would still
+            # verify; one label, one key.
+            raise ValueError("accepted_signers labels must be unique")
         for signer in signers:
             if not isinstance(signer, dict):
                 raise ValueError("each accepted signer must be an object")
@@ -269,7 +275,7 @@ def parse_policy(raw: bytes) -> Policy:
 
 
 def _safe_relpath(path: str, role: str) -> str:
-    if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path:
+    if not isinstance(path, str) or not path or path.startswith("/"):
         raise ValueError(f"{role}: {path!r} is not a repository-relative path")
     parts = path.split("/")
     if ".." in parts or "." in parts or "" in parts:
@@ -369,6 +375,18 @@ def _module_id(path: str) -> str | None:
     return rel.replace("/", ".")
 
 
+def _package_inits_of(path: str, files: dict[str, str]) -> list[str]:
+    """Every ``__init__.py`` on the package chain above ``path`` (under
+    ``scripts/``) that exists in ``files``, outermost first."""
+    inits: list[str] = []
+    parts = path[len(SCRIPTS_ROOT) :].split("/")[:-1]
+    for depth in range(1, len(parts) + 1):
+        init = SCRIPTS_ROOT + "/".join(parts[:depth]) + "/__init__.py"
+        if init in files:
+            inits.append(init)
+    return inits
+
+
 def _resolve(module_id: str, files: dict[str, str]) -> str | None:
     """A dotted module id to its file under ``scripts/``, or ``None`` for a
     standard-library, third-party or absent module."""
@@ -423,6 +441,10 @@ def regenerate_closure(candidate_dir: str, commit: str, policy: Policy) -> tuple
                 DERIVATION_POLICY_DRIFT, root, f"declared derivation root is absent at {commit[:12]}"
             )
         pending.append(root)
+        # A root inside a package is imported by dotted name, so Python executes
+        # every ancestor package initializer first: seed those that exist at this
+        # commit, so that adding one at the head lands in the protected set.
+        pending.extend(_package_inits_of(root, files))
     seen: set[str] = set()
     while pending:
         if len(seen) > MAX_CLOSURE_MODULES:
@@ -529,7 +551,10 @@ def raw_diff(candidate_dir: str, base: str, head: str) -> list[_Change]:
             old = new = os.fsdecode(fields[index + 1])
             index += 2
         for p in {old, new}:
-            _safe_relpath(p, "changed path")
+            try:
+                _safe_relpath(p, "changed path")
+            except ValueError as exc:
+                raise PolicyError(EVIDENCE_UNREADABLE, "-", str(exc)) from exc
         if code not in ("A", "D", "M", "T", "R", "C"):
             raise PolicyError(EVIDENCE_UNREADABLE, new, f"git diff emitted an unknown status {status!r}")
         pre = src_sha if src_sha.strip("0") else ABSENT
@@ -657,9 +682,11 @@ def expected_manifest(candidate_dir: str, repository: str, base_sha: str, head_s
 # --------------------------------------------------------------------------
 # Signature verification (argv only; bytes the gate already read)
 # --------------------------------------------------------------------------
-def _allowed_signers(policy: Policy) -> bytes:
-    lines = [f'{s.label} namespaces="{SIGNATURE_NAMESPACE}" {s.public_key}\n' for s in policy.signers]
-    return "".join(lines).encode("utf-8")
+def _allowed_signers(signer: Signer) -> bytes:
+    """An allowed-signers file naming exactly the one signer under test, so that
+    expiry and activity decided on this ``Signer`` govern exactly the key that
+    ``ssh-keygen`` is allowed to accept."""
+    return f'{signer.label} namespaces="{SIGNATURE_NAMESPACE}" {signer.public_key}\n'.encode("utf-8")
 
 
 def verify_signature(policy: Policy, signer: Signer, manifest: bytes, signature: bytes) -> str | None:
@@ -673,7 +700,7 @@ def verify_signature(policy: Policy, signer: Signer, manifest: bytes, signature:
         allowed = os.path.join(tmp, "allowed_signers")
         sig_path = os.path.join(tmp, "manifest.sig")
         with open(allowed, "wb") as handle:
-            handle.write(_allowed_signers(policy))
+            handle.write(_allowed_signers(signer))
         with open(sig_path, "wb") as handle:
             handle.write(signature)
         cmd = [

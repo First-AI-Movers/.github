@@ -576,6 +576,92 @@ class DerivationPolicyTestCase(unittest.TestCase):
             head = self.repo.commit("sign a non-canonical manifest")
             self.assertEqual(self.codes(self.evaluate(head)), [dp.DERIVATION_POLICY_MANIFEST_INCOMPLETE])
 
+    # -- review-thread repairs (PR #11 threads 3968966086 / 3968966100 / 3968977928) --
+    def test_added_root_package_initializer_is_protected_at_the_head(self) -> None:
+        # Codex P1: a root imported by dotted name executes its package __init__ first.
+        # The root here imports nothing from its own package, so the initializer is
+        # reachable only through seeding; adding one that did not exist at the base
+        # must land in the signed set instead of passing as an unreachable allowlisted file.
+        root = "scripts/commission_train/authority.py"
+        self.repo.remove("scripts/commission_train/__init__.py")
+        self.repo.base = self.repo.commit("base without the package initializer")
+        document = self.policy_document(not_after=FAR_FUTURE, members={root})
+        document["derivation_policy"]["roots"] = [root]
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        self.repo.write("scripts/commission_train/__init__.py", "import os\nos.environ['WIDENED'] = '1'\n")
+        head = self.repo.commit("add an executable package initializer, touch no root")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        manifest = self.manifest_for(head)
+        head = self.repo.commit("sign")
+        self.assertEqual(self.evaluate(head), [])
+        [entry] = json.loads(manifest)["entries"]
+        self.assertEqual((entry["path"], entry["status"]), ("scripts/commission_train/__init__.py", "added"))
+
+    def test_duplicate_signer_labels_are_refused(self) -> None:
+        # Codex P2: ssh-keygen -I <label> accepts any allowed-signers line sharing the
+        # label, so a rotated key under a reused label would let the expired key verify.
+        _p, other_public, other_fingerprint = keygen(self.keys, "rotated")
+        document = self.policy_document(not_after=PAST)
+        document["accepted_signers"].append(
+            {"label": LABEL, "fingerprint": other_fingerprint, "public_key": other_public, "not_after": FAR_FUTURE}
+        )
+        with self.assertRaises(dp.PolicyError) as ctx:
+            dp.parse_policy(json.dumps(document).encode())
+        self.assertEqual(ctx.exception.code, dp.GATE_CONFIG_INVALID)
+        self.assertIn("labels must be unique", ctx.exception.detail)
+
+    def test_verification_file_names_only_the_signer_under_test(self) -> None:
+        # Defence in depth for the same finding: the allowed-signers bytes handed to
+        # ssh-keygen carry exactly one key, and an expired key next to an active one
+        # under a distinct label is still refused.
+        old_private = self.private
+        new_private, new_public, new_fingerprint = keygen(self.keys, "rotated")
+        document = self.policy_document(not_after=PAST)
+        document["accepted_signers"].append(
+            {"label": "aeos-standing-governor-2", "fingerprint": new_fingerprint,
+             "public_key": new_public, "not_after": FAR_FUTURE}
+        )
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        policy = self.policy()
+        self.assertEqual(len(policy.signers), 2)
+        for signer in policy.signers:
+            allowed = dp._allowed_signers(signer).decode()
+            self.assertEqual(allowed.count("\n"), 1)
+            self.assertIn(signer.public_key, allowed)
+            self.assertNotIn([s for s in policy.signers if s is not signer][0].public_key, allowed)
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        self.manifest_for(head, private=old_private)
+        head = self.repo.commit("sign with the expired key")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn("expired", findings[0][2])
+        self.manifest_for(head, private=new_private)
+        head = self.repo.commit("sign with the active key")
+        self.assertEqual(self.evaluate(head), [])
+
+    def test_changed_path_with_a_backslash_is_ordinary_and_typed(self) -> None:
+        # CodeRabbit: a backslash is a legal file name; an unrelated one is inert, and
+        # a path this conjunct cannot accept is a typed EVIDENCE_UNREADABLE, not a
+        # bare ValueError.
+        self.repo.write("docs/odd\\name.md", "prose\n")
+        head = self.repo.commit("odd file name")
+        self.assertEqual(self.evaluate(head), [])
+        # git cannot emit a traversing path, so the typed conversion is exercised by
+        # substituting the plumbing for one record.
+        record = b":100644 100644 " + b"a" * 40 + b" " + b"b" * 40 + b" M\0../escape.py\0"
+        original = dp._git
+        dp._git = lambda *_args, **_kwargs: record
+        try:
+            with self.assertRaises(dp.PolicyError) as ctx:
+                dp.raw_diff(self.repo.root, self.repo.base, head)
+        finally:
+            dp._git = original
+        self.assertEqual(ctx.exception.code, dp.EVIDENCE_UNREADABLE)
+
     # -- composition into the gate -------------------------------------------------
     def test_gate_reports_the_typed_reason_and_keeps_every_other_floor(self) -> None:
         self.repo.write("scripts/agent_relay/models.py", "X = 2\n")

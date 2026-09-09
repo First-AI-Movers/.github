@@ -62,7 +62,7 @@ of those is almost certainly in the wrong place.
 **One narrow, documented accommodation — the standing-governor derivation-policy
 conjunct** (`aeos/derivation_policy.py`, decided by
 `ADR:standing-governor-continuity-authority` in `agent-toolkit` and authorized by
-#1951 decision 5600051094 item 2): it runs `ssh-keygen -Y verify` (argv only, over
+issue `#1951` decision 5600051094 item 2): it runs `ssh-keygen -Y verify` (argv only, over
 bytes the gate already read, against an allowed-signers file written from trusted
 policy into a private temporary directory), reads the wall clock once to decide
 signer expiry, and reads one committed data file, `aeos/standing-governor-policy.json`,

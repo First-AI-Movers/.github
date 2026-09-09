@@ -181,7 +181,13 @@ operator signature.
   on import), intersected with `allowlist_prefixes` + `allowlist_files`. The gate
   regenerates that set from the **base** commit on every evaluation, with trusted code
   parsing candidate Python as data, and refuses `DERIVATION_POLICY_DRIFT` when the
-  committed list differs. The list is never hand-kept. The gate regenerates the same
+  committed list differs. The list is never hand-edited, but it is **committed here and
+  refreshed by an ordinary PR**: after a signed protected change that alters the closure
+  merges in the target repository, every later candidate there that touches a protected
+  or allowlisted path is refused `DERIVATION_POLICY_DRIFT` until `members` is regenerated
+  (`derivation_policy.regenerate_closure(<clone>, <main sha>, policy)[1]`, sorted) and
+  committed in this repository; the lane that signs such a change owns that follow-up.
+  The gate regenerates the same
   closure at the **candidate head** too, and the set the candidate must sign is the union:
   a helper added under the allowlist and imported from a root is protected in the same
   change, so the signature covers the whole effective validator change. A file under the
