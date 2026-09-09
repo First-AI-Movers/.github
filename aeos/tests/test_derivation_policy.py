@@ -662,6 +662,161 @@ class DerivationPolicyTestCase(unittest.TestCase):
             dp._git = original
         self.assertEqual(ctx.exception.code, dp.EVIDENCE_UNREADABLE)
 
+    # -- the machine route (#3752 Slice A) -------------------------------------------
+    MACHINE = "aeos-autonomous-main[bot]"
+    OPERATOR = "hpcosta"
+    PROGRAMME_REF = "First-AI-Movers/agent-toolkit#3732"
+
+    def machine_policy(self, **kwargs) -> dict:
+        document = self.policy_document(not_after=kwargs.pop("not_after", None))
+        document["machine_route"] = {
+            "machine_principals": [{"login": self.MACHINE, "type": "Bot"}],
+            "operator_principals": [self.OPERATOR],
+        }
+        document["machine_route"].update(kwargs)
+        return document
+
+    def write_machine_policy(self, **kwargs) -> None:
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(self.machine_policy(**kwargs), handle)
+
+    def programme_body(self, *, state="ACTIVE", not_after="2999-01-01T00:00:00Z", envelope=None,
+                       repository=TARGET, issue=3732) -> str:
+        block = {"schema": "standing-authority/v2", "state": state, "repository": repository, "issue": issue,
+                 "programme_id": "at-1951-standing", "serial": 3, "not_after": not_after,
+                 "path_envelope": envelope or ["scripts/agent_relay/", "tests/agent_relay/"], "signature": ""}
+        return "## Quiet child\n```standing-authority\n" + json.dumps(block, sort_keys=True) + "\n```\n"
+
+    def evidence(self, *, author=None, author_type="Bot", programme=None, event="pull_request",
+                 repository=TARGET, pr_body=None, **programme_overrides) -> dict:
+        doc = {"schema": dp.EVIDENCE_SCHEMA, "event": event, "repository": repository, "actor": author or self.MACHINE}
+        if event == "pull_request":
+            doc["pull_request"] = {"number": 3760, "author_login": author or self.MACHINE, "author_type": author_type,
+                                   "head_sha": "0" * 40,
+                                   "body": pr_body if pr_body is not None else f"<!-- aeos-programme: {self.PROGRAMME_REF} -->"}
+            if programme is not False:
+                doc["programme"] = {"ref": self.PROGRAMME_REF, "state": "open", "author_login": self.OPERATOR,
+                                    "author_type": "User", "body": self.programme_body(), "updated_at": "t"}
+                doc["programme"].update(programme or {})
+                doc["programme"].update(programme_overrides)
+        return doc
+
+    def write_evidence(self, doc) -> str:
+        path = os.path.join(self.policy_dir, "evidence.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            if isinstance(doc, (bytes, bytearray)):
+                handle.write(doc.decode("utf-8", "replace"))
+            else:
+                json.dump(doc, handle)
+        return path
+
+    def protected_head(self) -> str:
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        return self.repo.commit("machine-authored protected change, no manifest")
+
+    def route(self, head, evidence_doc, **kwargs):
+        path = self.write_evidence(evidence_doc) if evidence_doc is not None else None
+        return dp.evaluate_derivation_policy(self.repo.root, kwargs.pop("repository", TARGET), self.repo.base, head,
+                                             self.policy_dir, evidence_path=path, **kwargs)
+
+    def test_a_machine_authored_protected_change_inside_a_current_operator_programme_needs_no_signature(self) -> None:
+        self.write_machine_policy()
+        head = self.protected_head()
+        self.assertEqual(self.route(head, self.evidence()), [])
+        # the same change with no evidence at all falls back to the SSH route and is refused
+        findings = self.route(head, None)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn(dp.MACHINE_ROUTE_EVIDENCE_ABSENT, findings[0][2])
+
+    def test_the_machine_route_is_off_unless_the_policy_pins_both_principal_sets(self) -> None:
+        # the signer-only policy (no machine_route) never admits an unsigned protected diff
+        head = self.protected_head()
+        findings = self.route(head, self.evidence())
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn(dp.MACHINE_ROUTE_DISABLED, findings[0][2])
+
+    def test_every_machine_route_negative_refuses_with_its_own_reason(self) -> None:
+        self.write_machine_policy()
+        head = self.protected_head()
+        cases = {
+            dp.MACHINE_ROUTE_ACTOR_IS_OPERATOR: self.evidence(author=self.OPERATOR, author_type="User"),
+            dp.MACHINE_ROUTE_ACTOR_NOT_MACHINE: self.evidence(author="someone-else[bot]"),
+            dp.MACHINE_ROUTE_ACTOR_NOT_MACHINE + "-human-pretending": self.evidence(author=self.MACHINE, author_type="User"),
+            dp.MACHINE_ROUTE_PROGRAMME_ABSENT: self.evidence(pr_body="no marker here"),
+            dp.MACHINE_ROUTE_PROGRAMME_ABSENT + "-two-markers": self.evidence(
+                pr_body=f"<!-- aeos-programme: {self.PROGRAMME_REF} --> <!-- aeos-programme: {TARGET}#1 -->"),
+            dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE: self.evidence(programme=False),
+            dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE + "-read-failed": self.evidence(unavailable="could not read"),
+            dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE + "-other-ref": self.evidence(ref=f"{TARGET}#99"),
+            dp.MACHINE_ROUTE_PROGRAMME_NOT_OPEN: self.evidence(state="closed"),
+            dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR: self.evidence(author_login=self.MACHINE, author_type="Bot"),
+            dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR + "-other-human": self.evidence(author_login="contributor"),
+            dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID: self.evidence(body="no block"),
+            dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-v1": self.evidence(
+                body="```standing-authority\n" + json.dumps({"schema": "standing-authority/v1", "state": "ACTIVE"}) + "\n```\n"),
+            dp.MACHINE_ROUTE_AUTHORITY_REF_MISMATCH: self.evidence(body=self.programme_body(issue=1951)),
+            dp.MACHINE_ROUTE_REPOSITORY_MISMATCH: self.evidence(repository="First-AI-Movers/other"),
+            dp.MACHINE_ROUTE_AUTHORITY_REF_MISMATCH + "-other-repo-block": self.evidence(
+                body=self.programme_body(repository="First-AI-Movers/other")),
+            dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE: self.evidence(body=self.programme_body(state="PAUSED")),
+            dp.MACHINE_ROUTE_AUTHORITY_EXPIRED: self.evidence(body=self.programme_body(not_after="2000-01-01T00:00:00Z")),
+            dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE: self.evidence(body=self.programme_body(envelope=["docs/"])),
+            dp.MACHINE_ROUTE_EVENT_UNPROVABLE: self.evidence(event="merge_group"),
+            dp.MACHINE_ROUTE_EVENT_UNPROVABLE + "-with-pr-block": dict(self.evidence(), event="merge_group"),
+            dp.MACHINE_ROUTE_EVIDENCE_MALFORMED: b"{not json",
+            dp.MACHINE_ROUTE_EVIDENCE_MALFORMED + "-schema": {"schema": "other"},
+        }
+        for label, doc in cases.items():
+            token = next(t for t in (
+                dp.MACHINE_ROUTE_ACTOR_IS_OPERATOR, dp.MACHINE_ROUTE_ACTOR_NOT_MACHINE, dp.MACHINE_ROUTE_PROGRAMME_ABSENT,
+                dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE, dp.MACHINE_ROUTE_PROGRAMME_NOT_OPEN,
+                dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR, dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID,
+                dp.MACHINE_ROUTE_AUTHORITY_REF_MISMATCH, dp.MACHINE_ROUTE_REPOSITORY_MISMATCH,
+                dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE, dp.MACHINE_ROUTE_AUTHORITY_EXPIRED,
+                dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE, dp.MACHINE_ROUTE_EVENT_UNPROVABLE,
+                dp.MACHINE_ROUTE_EVIDENCE_MALFORMED) if label.startswith(t))
+            findings = self.route(head, doc)
+            self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED], label)
+            self.assertIn(token, findings[0][2], label)
+
+    def test_the_machine_route_covers_renames_and_deletions_by_both_paths(self) -> None:
+        self.write_machine_policy()
+        self.repo.move("scripts/agent_relay/models.py", "scripts/agent_relay/models_v2.py")
+        head = self.repo.commit("rename inside the envelope")
+        self.assertEqual(self.route(head, self.evidence()), [])
+        # an envelope that covers only the new path does not cover the old one
+        findings = self.route(head, self.evidence(body=self.programme_body(envelope=["scripts/agent_relay/models_v2.py"])))
+        self.assertIn(dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE, findings[0][2])
+
+    def test_the_ssh_route_still_admits_when_the_machine_route_refuses(self) -> None:
+        self.write_machine_policy(not_after=FAR_FUTURE)
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify protected")
+        self.manifest_for(head)
+        head = self.repo.commit("sign")
+        self.assertEqual(self.route(head, self.evidence(author=self.OPERATOR, author_type="User")), [])
+        # and both refusals are reported together when neither route admits
+        self.repo.write("scripts/agent_relay/models.py", "X = 3\n")
+        head = self.repo.commit("modify again without re-signing")
+        findings = self.route(head, self.evidence(author=self.OPERATOR, author_type="User"))
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_MANIFEST_INCOMPLETE])
+
+    def test_a_policy_that_blurs_machine_and_operator_principals_is_invalid(self) -> None:
+        for bad in ({"operator_principals": [self.MACHINE]}, {"machine_principals": [{"login": self.OPERATOR, "type": "Bot"}]},
+                    {"machine_principals": [{"login": self.MACHINE, "type": "User"}]},
+                    {"machine_principals": []}, {"operator_principals": []}, {"extra": 1},
+                    {"operator_principals": [self.OPERATOR, self.OPERATOR]},
+                    {"machine_principals": [{"login": self.MACHINE, "type": "Bot"}, {"login": self.MACHINE, "type": "Bot"}]}):
+            with self.assertRaises(dp.PolicyError, msg=str(bad)):
+                dp.parse_policy(json.dumps(self.machine_policy(**bad)).encode())
+
+    def test_the_shipped_policy_pins_the_proven_principals(self) -> None:
+        shipped = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        policy = dp.load_policy(shipped)
+        self.assertTrue(policy.machine_route_enabled)
+        self.assertEqual(policy.machine_principals, (("aeos-autonomous-main[bot]", "Bot"),))
+        self.assertEqual(policy.operator_principals, frozenset({"hpcosta"}))
+
     # -- composition into the gate -------------------------------------------------
     def test_gate_reports_the_typed_reason_and_keeps_every_other_floor(self) -> None:
         self.repo.write("scripts/agent_relay/models.py", "X = 2\n")

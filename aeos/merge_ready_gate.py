@@ -859,6 +859,7 @@ def evaluate(
     clock=time.monotonic,
     policy_dir: str | None = None,
     now=time.time,
+    evidence_path: str | None = None,
 ) -> Report:
     started = clock()
     report = Report()
@@ -890,7 +891,8 @@ def evaluate(
         report.findings.extend(
             Finding(code, path, detail)
             for code, path, detail in derivation_policy.evaluate_derivation_policy(
-                candidate_dir, repository, base_sha, head_sha, policy_dir, now=now
+                candidate_dir, repository, base_sha, head_sha, policy_dir, now=now,
+                evidence_path=evidence_path,
             )
         )
     except derivation_policy.PolicyError as exc:
@@ -1265,6 +1267,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head-sha", default=os.environ.get("AEOS_HEAD_SHA", ""))
     parser.add_argument("--hard-budget-seconds", type=float, default=DEFAULT_HARD_BUDGET_SECONDS)
     parser.add_argument("--soft-budget-seconds", type=float, default=DEFAULT_SOFT_BUDGET_SECONDS)
+    parser.add_argument("--evidence-file", default=os.environ.get("AEOS_ACTOR_EVIDENCE") or None,
+                        help="the trusted workflow's aeos-actor-evidence/v1 file (machine route)")
     args = parser.parse_args(argv)
 
     report = _evaluate_guarded(
@@ -1275,6 +1279,7 @@ def main(argv: list[str] | None = None) -> int:
         event_name=args.event_name,
         hard_budget=args.hard_budget_seconds,
         soft_budget=args.soft_budget_seconds,
+        evidence_path=args.evidence_file,
     )
     text = render(report, args.repository, args.event_name, args.base_sha, args.head_sha)
     sys.stdout.write(text)
