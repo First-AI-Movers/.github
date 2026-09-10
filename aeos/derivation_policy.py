@@ -79,6 +79,31 @@ POLICY_SCHEMA = "aeos-standing-governor-policy/v1"
 MANIFEST_SCHEMA = "derivation-policy-manifest/v1"
 SIGNATURE_NAMESPACE = "at-derivation-policy"
 
+EVIDENCE_SCHEMA = "aeos-actor-evidence/v1"
+PROGRAMME_MARKER = "aeos-programme:"
+PROGRAMME_BLOCK_SCHEMA = "standing-authority/v2"
+MAX_EVIDENCE_BYTES = 512 * 1024
+MAX_PROGRAMME_EDITS = 100
+"""The gate's own bound on the edit history it will judge (the workflow records at most this many;
+a longer history is unavailable, not "operator-only by assumption")."""
+MAX_PROGRAMME_TTL_SECONDS = 14 * 24 * 3600
+"""A programme block's `not_after` may lie at most this far ahead of the evaluation clock — the
+estate's ≤ 14-day ceiling bound (ADR §D15): an authority that a stolen or stale Issue body could
+carry forever is not a current authority."""
+"""The machine route (#3752 Slice A). The trusted workflow — never the candidate — writes one
+``aeos-actor-evidence/v1`` file: the GitHub-authenticated pull-request author (login, type),
+the workflow actor, and the programme Issue the candidate's body names with
+``<!-- aeos-programme: owner/repo#N -->`` (its state, author login/type and body, read with the
+workflow's own token). The networkless gate then admits a protected diff WITHOUT an operator
+SSH signature when, and only when, every one of these holds: the author is a pinned machine
+principal and not a pinned operator principal; the programme Issue is OPEN, authored by a
+pinned operator principal, and carries a ``standing-authority/v2`` block naming this
+repository and that Issue, ``state: ACTIVE`` and an unexpired ``not_after``; every protected
+changed path lies inside that block's ``path_envelope``. Anything missing, stale or ambiguous
+fails closed to the SSH route, which stays as the break-glass/transition path. Credential
+reachability alone grants nothing: the App token can open the PR, but only the operator's
+authorship of the Issue authorizes its scope."""
+
 MANIFEST_PATH = "aeos/derivation-policy-manifest.json"
 SIGNATURE_PATH = "aeos/derivation-policy-manifest.sig"
 """Where the candidate carries the manifest and its detached SSH signature.
@@ -100,6 +125,10 @@ STATUSES = ("added", "modified", "deleted", "renamed")
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 _FINGERPRINT_RE = re.compile(r"^SHA256:[A-Za-z0-9+/]{43}$")
 _LABEL_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
+_LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})(?:\[bot\])?$")
+_PROGRAMME_REF_RE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$")
+_PROGRAMME_MARKER_RE = re.compile(r"<!--\s*aeos-programme:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)\s*-->")
+_BLOCK_RE = re.compile(r"^```standing-authority[ \t]*\n(.*?)\n```[ \t]*(?:\n|$)", re.M | re.S)
 _PUBKEY_RE = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+$")
 
 
@@ -159,6 +188,8 @@ class Policy:
         "members",
         "manifest_path",
         "signature_path",
+        "machine_principals",
+        "operator_principals",
     )
 
     def __init__(self, document: dict) -> None:
@@ -174,6 +205,15 @@ class Policy:
         self.members = frozenset(policy["members"])
         self.manifest_path = document.get("manifest_path", MANIFEST_PATH)
         self.signature_path = document.get("signature_path", SIGNATURE_PATH)
+        route = document.get("machine_route") or {}
+        self.machine_principals = tuple(
+            (m["login"], m["type"]) for m in route.get("machine_principals", ())
+        )
+        self.operator_principals = frozenset(route.get("operator_principals", ()))
+
+    @property
+    def machine_route_enabled(self) -> bool:
+        return bool(self.machine_principals) and bool(self.operator_principals)
 
     def protects(self, path: str) -> bool:
         return path in self.members
@@ -185,16 +225,17 @@ class Policy:
 
 
 def _parse_not_after(value, label: str):
+    """``label`` names the holder in messages (``signer <label>`` or ``programme``)."""
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"signer {label}: not_after must be a string or null")
+        raise ValueError(f"{label}: not_after must be a string or null")
     try:
         stamp = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ValueError(f"signer {label}: not_after is not ISO-8601: {exc}") from exc
+        raise ValueError(f"{label}: not_after is not ISO-8601: {exc}") from exc
     if stamp.tzinfo is None:
-        raise ValueError(f"signer {label}: not_after must carry a UTC offset")
+        raise ValueError(f"{label}: not_after must carry a UTC offset")
     return stamp.timestamp()
 
 
@@ -245,7 +286,7 @@ def parse_policy(raw: bytes) -> Policy:
                     f"signer {label}: fingerprint {signer['fingerprint']} is not the "
                     f"fingerprint of public_key ({computed})"
                 )
-            signer["not_after"] = _parse_not_after(signer.get("not_after"), label)
+            signer["not_after"] = _parse_not_after(signer.get("not_after"), f"signer {label}")
         policy = document.get("derivation_policy")
         if not isinstance(policy, dict):
             raise ValueError("derivation_policy must be an object")
@@ -269,6 +310,30 @@ def parse_policy(raw: bytes) -> Policy:
         for key in ("manifest_path", "signature_path"):
             if key in document:
                 _safe_relpath(document[key], key)
+        route = document.get("machine_route")
+        if route is not None:
+            if (not isinstance(route, dict)
+                    or set(route) - {"machine_principals", "operator_principals", "decision"}):
+                raise ValueError("machine_route must carry only machine_principals, operator_principals and a decision note")
+            machines = route.get("machine_principals")
+            operators = route.get("operator_principals")
+            if (not isinstance(machines, list) or not machines or not isinstance(operators, list) or not operators):
+                raise ValueError("machine_route needs non-empty machine_principals and operator_principals")
+            logins = []
+            for entry in machines:
+                if (not isinstance(entry, dict) or set(entry) != {"login", "type"}
+                        or not isinstance(entry["login"], str) or not _LOGIN_RE.match(entry["login"])
+                        or entry["type"] != "Bot"):
+                    raise ValueError("each machine principal is {login: '<app>[bot]', type: 'Bot'}")
+                if not entry["login"].endswith("[bot]"):
+                    raise ValueError("a machine principal login must end with [bot]")
+                logins.append(entry["login"])
+            for login in operators:
+                if not isinstance(login, str) or not _LOGIN_RE.match(login) or login.endswith("[bot]"):
+                    raise ValueError("each operator principal is a human GitHub login")
+            if set(logins) & set(operators) or len(set(logins)) != len(logins) or len(set(operators)) != len(operators):
+                # Identity separation is the whole point: one login can never be both.
+                raise ValueError("machine and operator principals must be disjoint and unique")
         return Policy(document)
     except (KeyError, TypeError, ValueError) as exc:
         raise PolicyError(GATE_CONFIG_INVALID, POLICY_FILE, f"policy is invalid: {exc}")
@@ -723,6 +788,198 @@ def verify_signature(policy: Policy, signer: Signer, manifest: bytes, signature:
 # --------------------------------------------------------------------------
 # The conjunct
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# The machine route (#3752 Slice A): authenticated actor + operator programme authority
+# --------------------------------------------------------------------------
+MACHINE_ROUTE_DISABLED = "MACHINE_ROUTE_DISABLED"
+MACHINE_ROUTE_EVIDENCE_ABSENT = "MACHINE_ROUTE_EVIDENCE_ABSENT"
+MACHINE_ROUTE_EVIDENCE_MALFORMED = "MACHINE_ROUTE_EVIDENCE_MALFORMED"
+MACHINE_ROUTE_EVENT_UNPROVABLE = "MACHINE_ROUTE_EVENT_UNPROVABLE"
+MACHINE_ROUTE_ACTOR_NOT_MACHINE = "MACHINE_ROUTE_ACTOR_NOT_MACHINE"
+MACHINE_ROUTE_ACTOR_IS_OPERATOR = "MACHINE_ROUTE_ACTOR_IS_OPERATOR"
+MACHINE_ROUTE_TRIGGER_NOT_MACHINE = "MACHINE_ROUTE_TRIGGER_NOT_MACHINE"
+MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE = "MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE"
+MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR = "MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR"
+MACHINE_ROUTE_PROGRAMME_ABSENT = "MACHINE_ROUTE_PROGRAMME_ABSENT"
+MACHINE_ROUTE_PROGRAMME_UNAVAILABLE = "MACHINE_ROUTE_PROGRAMME_UNAVAILABLE"
+MACHINE_ROUTE_PROGRAMME_NOT_OPEN = "MACHINE_ROUTE_PROGRAMME_NOT_OPEN"
+MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR = "MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR"
+MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID = "MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID"
+MACHINE_ROUTE_AUTHORITY_REF_MISMATCH = "MACHINE_ROUTE_AUTHORITY_REF_MISMATCH"
+MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE = "MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE"
+MACHINE_ROUTE_AUTHORITY_EXPIRED = "MACHINE_ROUTE_AUTHORITY_EXPIRED"
+MACHINE_ROUTE_REPOSITORY_MISMATCH = "MACHINE_ROUTE_REPOSITORY_MISMATCH"
+MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE = "MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE"
+MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE = "MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE"
+MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED = "MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED"
+
+
+def load_evidence(path: str | None, *, candidate_dir: str | None = None) -> tuple[dict | None, str | None]:
+    """``(evidence, reason)``: the trusted workflow's evidence document, or a typed reason why
+    the machine route cannot be evaluated. Never raises; absence is a reason, not a pass. A path
+    that resolves inside the candidate tree is refused: evidence is the workflow's, never the
+    candidate's, even when no candidate code runs."""
+    if not path:
+        return None, MACHINE_ROUTE_EVIDENCE_ABSENT
+    if candidate_dir:
+        real = os.path.realpath(path)
+        root = os.path.realpath(candidate_dir)
+        if real == root or real.startswith(root.rstrip(os.sep) + os.sep):
+            return None, MACHINE_ROUTE_EVIDENCE_MALFORMED
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(MAX_EVIDENCE_BYTES + 1)
+    except OSError:
+        return None, MACHINE_ROUTE_EVIDENCE_ABSENT
+    if len(raw) > MAX_EVIDENCE_BYTES:
+        return None, MACHINE_ROUTE_EVIDENCE_MALFORMED
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None, MACHINE_ROUTE_EVIDENCE_MALFORMED
+    if not isinstance(document, dict) or document.get("schema") != EVIDENCE_SCHEMA:
+        return None, MACHINE_ROUTE_EVIDENCE_MALFORMED
+    return document, None
+
+
+def programme_ref_from_body(body: str) -> str | None:
+    """The single ``<!-- aeos-programme: owner/repo#N -->`` marker in a PR body, or ``None``
+    when there is not exactly one. The marker SELECTS a source; it grants nothing."""
+    if not isinstance(body, str):
+        return None
+    refs = _PROGRAMME_MARKER_RE.findall(body)
+    return refs[0] if len(refs) == 1 else None
+
+
+def programme_block(body: str) -> dict | None:
+    """The ``standing-authority/v2`` block on the programme Issue, read as data with only the
+    keys the machine route needs; ``None`` when absent or malformed."""
+    if not isinstance(body, str):
+        return None
+    matches = list(_BLOCK_RE.finditer(body))
+    if len(matches) != 1:
+        return None
+    try:
+        block = json.loads(matches[0][1])
+    except ValueError:
+        return None
+    if not isinstance(block, dict) or block.get("schema") != PROGRAMME_BLOCK_SCHEMA:
+        return None
+    for key in ("state", "repository", "issue", "not_after", "path_envelope"):
+        if key not in block:
+            return None
+    if (not isinstance(block["repository"], str) or type(block["issue"]) is not int
+            or not isinstance(block["state"], str) or not isinstance(block["not_after"], str)
+            or not isinstance(block["path_envelope"], list) or not block["path_envelope"]
+            or any(not isinstance(p, str) or not p for p in block["path_envelope"])):
+        return None
+    # The WHOLE envelope is validated here, once, so a malformed entry anywhere in the list
+    # invalidates the block regardless of where a matching entry sits.
+    for prefix in block["path_envelope"]:
+        try:
+            _safe_relpath(prefix.rstrip("/") or "/", "path_envelope")
+        except ValueError:
+            return None  # absolute, traversing and empty-segment entries land here; a backslash
+            # entry is accepted by the path rule and can never match a git path, so it is inert
+    return block
+
+
+def _within_envelope(path: str, envelope: list[str], *, exact_only: bool = False) -> bool:
+    """Prefix entries end with ``/``; every other entry is an exact file. A declared derivation
+    ROOT (``exact_only``) is admitted only by an exact entry: a directory prefix such as
+    ``scripts/agent_relay/`` must never silently authorise rewriting the ceiling parser itself."""
+    for prefix in envelope:
+        if prefix.endswith("/"):
+            if not exact_only and path.startswith(prefix):
+                return True
+        elif path == prefix:
+            return True
+    return False
+
+
+def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | None,
+                  repository: str, entries: list[Entry], now: float) -> str | None:
+    """``None`` when the machine route admits this protected diff; otherwise the ONE typed
+    reason it does not. Every conjunct is checked; the first failure names the reason."""
+    if not policy.machine_route_enabled:
+        return MACHINE_ROUTE_DISABLED
+    if evidence is None:
+        return evidence_reason or MACHINE_ROUTE_EVIDENCE_ABSENT
+    # A merge-group run is provable only when the workflow resolved the queued PR itself
+    # (from the queue's head ref) and recorded it as authenticated pull-request evidence.
+    if (evidence.get("event") not in ("pull_request", "merge_group")
+            or not isinstance(evidence.get("pull_request"), dict)):
+        return MACHINE_ROUTE_EVENT_UNPROVABLE
+    pr = evidence["pull_request"]
+    login, kind = pr.get("author_login"), pr.get("author_type")
+    if not isinstance(login, str) or not isinstance(kind, str):
+        return MACHINE_ROUTE_EVIDENCE_MALFORMED
+    if login in policy.operator_principals:
+        return MACHINE_ROUTE_ACTOR_IS_OPERATOR
+    if (login, kind) not in policy.machine_principals:
+        return MACHINE_ROUTE_ACTOR_NOT_MACHINE
+    machine_logins = {m for m, _ in policy.machine_principals}
+    # The PR author is not enough: a collaborator can push to a bot-authored PR, and the PR
+    # keeps its bot author. The workflow actor (who triggered this run) and the author of the
+    # head commit must both be the machine as well.
+    if evidence.get("actor") not in machine_logins:
+        return MACHINE_ROUTE_TRIGGER_NOT_MACHINE
+    if pr.get("head_commit_author_login") not in machine_logins:
+        return MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE
+    if (evidence.get("repository") or "").strip().lower() != repository.strip().lower():
+        return MACHINE_ROUTE_REPOSITORY_MISMATCH
+    ref = programme_ref_from_body(pr.get("body", ""))
+    if ref is None:
+        return MACHINE_ROUTE_PROGRAMME_ABSENT
+    programme = evidence.get("programme")
+    if not isinstance(programme, dict) or programme.get("ref") != ref:
+        return MACHINE_ROUTE_PROGRAMME_UNAVAILABLE
+    if programme.get("unavailable"):
+        return MACHINE_ROUTE_PROGRAMME_UNAVAILABLE
+    if programme.get("state") != "open":
+        return MACHINE_ROUTE_PROGRAMME_NOT_OPEN
+    if (programme.get("author_login") not in policy.operator_principals
+            or programme.get("author_type") != "User"):
+        return MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR
+    # GitHub keeps the creator in `user` after any edit. The body is authoritative only when
+    # every recorded edit was made by an operator principal: the workflow records the Issue's
+    # content-edit history (GraphQL userContentEdits) and an unreadable history is not "none".
+    editors = programme.get("editors")
+    if (not isinstance(editors, list) or any(not isinstance(e, str) for e in editors)
+            or len(editors) > MAX_PROGRAMME_EDITS):
+        return MACHINE_ROUTE_PROGRAMME_UNAVAILABLE
+    if any(e not in policy.operator_principals for e in editors):
+        return MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR
+    block = programme_block(programme.get("body", ""))
+    if block is None:
+        return MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID
+    if f"{block['repository']}#{block['issue']}" != ref:
+        return MACHINE_ROUTE_AUTHORITY_REF_MISMATCH
+    if block["repository"].strip().lower() != repository.strip().lower():
+        return MACHINE_ROUTE_REPOSITORY_MISMATCH
+    if block["state"] != "ACTIVE":
+        return MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE
+    try:
+        not_after = _parse_not_after(block["not_after"], "programme")
+    except ValueError:
+        return MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID
+    if not_after is None or now >= not_after:
+        return MACHINE_ROUTE_AUTHORITY_EXPIRED
+    if not_after - now > MAX_PROGRAMME_TTL_SECONDS:
+        return MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED
+    roots = set(policy.roots)
+    for entry in entries:
+        for path in (entry.path, entry.rename_from):
+            if path is None:
+                continue
+            if path in roots:
+                if not _within_envelope(path, block["path_envelope"], exact_only=True):
+                    return MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE
+            elif not _within_envelope(path, block["path_envelope"]):
+                return MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE
+    return None
+
+
 def evaluate_derivation_policy(
     candidate_dir: str,
     repository: str,
@@ -730,6 +987,7 @@ def evaluate_derivation_policy(
     head_sha: str,
     policy_dir: str,
     now=time.time,
+    evidence_path: str | None = None,
 ) -> list[tuple[str, str, str]]:
     """``(code, path, detail)`` findings for the derivation-policy conjunct.
 
@@ -760,7 +1018,15 @@ def evaluate_derivation_policy(
     if not entries:
         return findings  # allowlisted-but-unprotected change: no signature needed
 
-    # A protected diff needs the operator's signature over its canonical bytes.
+    # Route 1 — the machine route: an admitted machine principal executing inside a current
+    # operator-authored programme authority needs no operator signature (#3752).
+    stamp = now()
+    evidence, evidence_reason = load_evidence(evidence_path, candidate_dir=candidate_dir)
+    route_reason = machine_route(policy, evidence, evidence_reason, repository, entries, stamp)
+    if route_reason is None:
+        return findings
+
+    # Route 2 — break-glass / transition: the operator's signature over the canonical bytes.
     head_tree = tree_paths(candidate_dir, head_sha, "aeos/")
     manifest_sha = head_tree.get(policy.manifest_path)
     signature_sha = head_tree.get(policy.signature_path)
@@ -770,8 +1036,8 @@ def evaluate_derivation_policy(
             (
                 DERIVATION_POLICY_DIFF_UNSIGNED,
                 policy.manifest_path,
-                f"{len(entries)} protected path(s) changed and the head carries no "
-                f"signed manifest ({policy.manifest_path} + {policy.signature_path})",
+                f"{len(entries)} protected path(s) changed; machine route: {route_reason}; "
+                f"the head carries no signed manifest ({policy.manifest_path} + {policy.signature_path})",
             )
         )
         return findings
@@ -793,8 +1059,7 @@ def evaluate_derivation_policy(
         )
         return findings
 
-    stamp = now()
-    reasons: list[str] = []
+    reasons: list[str] = [f"machine route: {route_reason}"]
     for signer in policy.signers:
         if signer.not_after is None:
             reasons.append(f"{signer.label}: signer entry is not active (not_after unset)")

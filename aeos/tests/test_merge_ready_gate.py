@@ -21,9 +21,11 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import derivation_policy  # noqa: E402
 import merge_ready_gate as gate  # noqa: E402
 
 GIT_ENV = {
@@ -109,6 +111,94 @@ class GateTestCase(unittest.TestCase):
         self.assertFalse(report.passed, f"expected FAIL {code}, got PASS")
         self.assertEqual(report.primary, code)
         self.assertIn(code, gate.REASON_CODES)
+
+    # -- #3752: a machine principal never edits its own judge; evidence reaches the CLI ------
+    def _machine_policy_dir(self) -> str:
+        import base64 as _b64, hashlib as _hl
+        blob = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"\x01" * 32
+        public = "ssh-ed25519 " + _b64.b64encode(blob).decode()
+        fingerprint = "SHA256:" + _b64.b64encode(_hl.sha256(blob).digest()).decode().rstrip("=")
+        policy_dir = tempfile.mkdtemp(dir=self._tmp.name)
+        with open(os.path.join(policy_dir, derivation_policy.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump({
+                "schema": derivation_policy.POLICY_SCHEMA, "target_repository": "First-AI-Movers/agent-toolkit",
+                "accepted_signers": [{"label": "aeos-standing-governor", "fingerprint": fingerprint,
+                                      "public_key": public, "not_after": None}],
+                "derivation_policy": {"roots": ["scripts/x.py"], "allowlist_prefixes": [], "allowlist_files": [],
+                                      "members": ["scripts/x.py"]},
+                "machine_route": {"machine_principals": [{"login": "aeos-autonomous-main[bot]", "type": "Bot"}],
+                                  "operator_principals": ["hpcosta"]},
+            }, handle)
+        return policy_dir
+
+    def _evidence_file(self, author: str, author_type: str = "Bot") -> str:
+        # Outside the candidate tree on purpose: evidence inside it is refused (review F8).
+        path = os.path.join(tempfile.mkdtemp(prefix="aeos-evidence-"), "evidence.json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"schema": derivation_policy.EVIDENCE_SCHEMA, "event": "pull_request",
+                       "repository": "First-AI-Movers/.github", "actor": author,
+                       "pull_request": {"number": 1, "author_login": author, "author_type": author_type,
+                                        "head_sha": "0" * 40, "head_commit_author_login": author, "body": ""}}, handle)
+        return path
+
+    def test_a_machine_principal_may_not_change_the_policy_repository_control_plane(self) -> None:
+        policy_dir = self._machine_policy_dir()
+        self.repo.write("aeos/derivation_policy.py", "MACHINE = 'widened'\n")
+        head = self.repo.commit("bot edits the judge")
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir,
+                               evidence_path=self._evidence_file("aeos-autonomous-main[bot]"))
+        self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+        # the operator opening the same change is judged on its content, not deferred
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir,
+                               evidence_path=self._evidence_file("hpcosta", "User"))
+        self.assertNotIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+        # an unknown bot is refused too; a consumer repository is untouched by this conjunct
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir,
+                               evidence_path=self._evidence_file("other[bot]"))
+        self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+        # positive identification is required on BOTH author and actor: an operator author with a
+        # machine actor, an operator author of type Bot, an empty author, or a human who is not a
+        # pinned operator all refuse; absent evidence (the pre-evidence workflow) judges on content
+        for author, kind, actor in (("hpcosta", "User", "aeos-autonomous-main[bot]"), ("hpcosta", "Bot", "hpcosta"),
+                                    ("", "User", "hpcosta"), ("contributor", "User", "contributor"),
+                                    ("hpcosta", "User", "")):
+            path = self._evidence_file(author, kind)
+            with open(path, encoding="utf-8") as handle:
+                doc = json.load(handle)
+            doc["actor"] = actor
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(doc, handle)
+            report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir, evidence_path=path)
+            self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings}, (author, kind, actor))
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir, evidence_path=None)
+        self.assertNotIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+        # the guard does not depend on machine_route: with it removed a bot is still refused
+        with open(os.path.join(policy_dir, derivation_policy.POLICY_FILE), encoding="utf-8") as handle:
+            document = json.load(handle)
+        document.pop("machine_route")
+        with open(os.path.join(policy_dir, derivation_policy.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir,
+                               evidence_path=self._evidence_file("aeos-autonomous-main[bot]"))
+        self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+        report = self.run_gate(head, repository="First-AI-Movers/example", policy_dir=policy_dir,
+                               evidence_path=self._evidence_file("aeos-autonomous-main[bot]"))
+        self.assertNotIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+
+    def test_the_evidence_file_reaches_the_gate_through_the_cli(self) -> None:
+        self.repo.write("aeos/merge_ready_gate.py", "X = 1\n")
+        head = self.repo.commit("bot edits the gate")
+        evidence = self._evidence_file("aeos-autonomous-main[bot]")
+        with mock.patch.object(gate, "evaluate", wraps=gate.evaluate) as spy:
+            gate.main(["--candidate-dir", self.repo.root, "--repository", "First-AI-Movers/.github",
+                       "--event-name", "pull_request", "--base-sha", self.repo.base, "--head-sha", head,
+                       "--evidence-file", evidence])
+            self.assertEqual(spy.call_args.kwargs.get("evidence_path"), evidence)
+        with mock.patch.dict(os.environ, {"AEOS_ACTOR_EVIDENCE": evidence}):
+            with mock.patch.object(gate, "evaluate", wraps=gate.evaluate) as spy:
+                gate.main(["--candidate-dir", self.repo.root, "--repository", "First-AI-Movers/.github",
+                           "--event-name", "pull_request", "--base-sha", self.repo.base, "--head-sha", head])
+                self.assertEqual(spy.call_args.kwargs.get("evidence_path"), evidence)
 
     # -- clean / empty -----------------------------------------------------
     def test_clean_changed_set_passes(self) -> None:

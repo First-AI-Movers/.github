@@ -859,6 +859,7 @@ def evaluate(
     clock=time.monotonic,
     policy_dir: str | None = None,
     now=time.time,
+    evidence_path: str | None = None,
 ) -> Report:
     started = clock()
     report = Report()
@@ -890,7 +891,8 @@ def evaluate(
         report.findings.extend(
             Finding(code, path, detail)
             for code, path, detail in derivation_policy.evaluate_derivation_policy(
-                candidate_dir, repository, base_sha, head_sha, policy_dir, now=now
+                candidate_dir, repository, base_sha, head_sha, policy_dir, now=now,
+                evidence_path=evidence_path,
             )
         )
     except derivation_policy.PolicyError as exc:
@@ -903,6 +905,34 @@ def evaluate(
     # floors specific to the merge-control surface it changes, by the trusted
     # policy resolved from the base commit. It is judged, not deferred.
     report.control_plane = control_plane_violations([c.path for c in changes], repository)
+
+    # #3752 architecture lock 5, at the estate level: a MACHINE principal never edits its own
+    # judge. In this policy repository a control-plane change (the gate, the derivation policy,
+    # the workflow) is judged on its content ONLY when the trusted workflow's evidence positively
+    # identifies an operator: the PR author must be a pinned operator principal of type User and
+    # the run's actor must be an operator principal too. Any bot, any machine principal, an empty
+    # or unreadable author or actor inside PRESENT evidence — all refuse. Absent evidence (no file)
+    # is the pre-evidence workflow shape and is judged on content as before; the workflow on main
+    # always writes the file, so the reachable live shapes are the positive ones. This guard does
+    # not depend on `machine_route` being configured: a `[bot]` author is refused regardless.
+    if report.control_plane and (repository or "").strip().lower() == POLICY_REPOSITORY:
+        try:
+            judge_policy = derivation_policy.load_policy(policy_dir)
+        except derivation_policy.PolicyError:
+            judge_policy = None
+        operators = set(judge_policy.operator_principals) if judge_policy else set()
+        evidence, _reason = derivation_policy.load_evidence(evidence_path, candidate_dir=candidate_dir)
+        if isinstance(evidence, dict):
+            pull = evidence.get("pull_request") if isinstance(evidence.get("pull_request"), dict) else {}
+            author, kind, actor = pull.get("author_login"), pull.get("author_type"), evidence.get("actor")
+            identified_operator = (isinstance(author, str) and author in operators and kind == "User"
+                                   and isinstance(actor, str) and actor in operators)
+            if not identified_operator:
+                report.findings.append(Finding(
+                    CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, sorted(report.control_plane)[0],
+                    "only a positively identified operator may change the policy that judges machine "
+                    f"principals: author={author!r} ({kind!r}) actor={actor!r}",
+                ))
     strict = {p.lower() for p in report.control_plane}
 
     # Exemptions are read from the BASE commit either way, so a branch still
@@ -1265,6 +1295,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--head-sha", default=os.environ.get("AEOS_HEAD_SHA", ""))
     parser.add_argument("--hard-budget-seconds", type=float, default=DEFAULT_HARD_BUDGET_SECONDS)
     parser.add_argument("--soft-budget-seconds", type=float, default=DEFAULT_SOFT_BUDGET_SECONDS)
+    parser.add_argument("--evidence-file", default=os.environ.get("AEOS_ACTOR_EVIDENCE") or None,
+                        help="the trusted workflow's aeos-actor-evidence/v1 file (machine route)")
     args = parser.parse_args(argv)
 
     report = _evaluate_guarded(
@@ -1275,6 +1307,7 @@ def main(argv: list[str] | None = None) -> int:
         event_name=args.event_name,
         hard_budget=args.hard_budget_seconds,
         soft_budget=args.soft_budget_seconds,
+        evidence_path=args.evidence_file,
     )
     text = render(report, args.repository, args.event_name, args.base_sha, args.head_sha)
     sys.stdout.write(text)

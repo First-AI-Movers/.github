@@ -37,6 +37,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      # Read-only: the evidence step reads the pull request and the programme Issue it names
+      # with the workflow's own token. Nothing here can write, and the gate itself stays networkless.
+      pull-requests: read
+      issues: read
 
     steps:
       - name: Check out candidate (untrusted data)
@@ -56,6 +60,81 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
           show-progress: false
+
+      - name: Collect authenticated evidence (trusted; machine route)
+        # #3752 Slice A. Writes ONE aeos-actor-evidence/v1 file from GitHub-authenticated facts:
+        # the pull-request author (login + type) and actor from the event payload FILE (never
+        # interpolated into this script), and the programme Issue the PR body names with
+        # `<!-- aeos-programme: owner/repo#N -->`, read with `gh api` under the job token. Any
+        # failure writes an evidence file that says why, so the gate fails closed to the
+        # break-glass SSH route instead of guessing. Also recorded: the head commit's author
+        # and the programme Issue's content-edit history, so a collaborator push or a body
+        # edit by a non-operator cannot ride on a bot-authored PR or an operator-created Issue.
+        # On merge_group the queued PR is resolved from the queue's head ref.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AEOS_EVENT_NAME: ${{ github.event_name }}
+          AEOS_EVENT_PATH: ${{ github.event_path }}
+          AEOS_ACTOR: ${{ github.actor }}
+          AEOS_REPOSITORY: ${{ github.repository }}
+          AEOS_ACTOR_EVIDENCE: ${{ runner.temp }}/aeos-actor-evidence.json
+        run: |
+          set -uo pipefail
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          out = os.environ["AEOS_ACTOR_EVIDENCE"]
+          repo = os.environ.get("AEOS_REPOSITORY", "")
+          event_name = os.environ.get("AEOS_EVENT_NAME", "")
+          doc = {"schema": "aeos-actor-evidence/v1", "event": event_name, "repository": repo,
+                 "actor": os.environ.get("AEOS_ACTOR", "")}
+          def api(path, *args):
+              r = subprocess.run(["gh", "api", path, *args], capture_output=True, text=True, timeout=30, check=False)
+              return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+          try:
+              with open(os.environ["AEOS_EVENT_PATH"], encoding="utf-8") as handle:
+                  event = json.load(handle)
+              pr = event.get("pull_request") if isinstance(event, dict) else None
+              if pr is None and event_name == "merge_group":
+                  # The queue's head ref names the queued PR: refs/heads/gh-readonly-queue/<base>/pr-<N>-<sha>
+                  head_ref = ((event.get("merge_group") or {}).get("head_ref") or "")
+                  m = re.search(r"/pr-([1-9][0-9]*)-[0-9a-f]{40}$", head_ref)
+                  if m:
+                      pr = api(f"repos/{repo}/pulls/{m.group(1)}")
+              if isinstance(pr, dict):
+                  user = pr.get("user") or {}
+                  body = pr.get("body") or ""
+                  head_sha = (pr.get("head") or {}).get("sha")
+                  commit = api(f"repos/{repo}/commits/{head_sha}") if head_sha else None
+                  doc["pull_request"] = {"number": pr.get("number"), "author_login": user.get("login"),
+                                         "author_type": user.get("type"), "head_sha": head_sha, "body": body,
+                                         "head_commit_author_login": ((commit or {}).get("author") or {}).get("login")}
+                  refs = re.findall(r"<!--\s*aeos-programme:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)\s*-->", body)
+                  if len(refs) == 1:
+                      prepo, number = refs[0].split("#")
+                      issue = api(f"repos/{prepo}/issues/{number}")
+                      if issue is not None:
+                          owner, name = prepo.split("/", 1)
+                          query = ("query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){"
+                                   "userContentEdits(first:100){totalCount nodes{editor{login}}}}}}")
+                          edits = api("graphql", "-f", f"query={query}", "-f", f"o={owner}", "-f", f"n={name}", "-F", f"i={number}")
+                          editors = None
+                          try:
+                              uce = edits["data"]["repository"]["issue"]["userContentEdits"]
+                              if uce["totalCount"] <= 100:
+                                  editors = [((n.get("editor") or {}).get("login") or "") for n in uce["nodes"]]
+                          except (KeyError, TypeError):
+                              editors = None
+                          iu = issue.get("user") or {}
+                          doc["programme"] = {"ref": refs[0], "state": issue.get("state"), "author_login": iu.get("login"),
+                                              "author_type": iu.get("type"), "body": issue.get("body") or "",
+                                              "updated_at": issue.get("updated_at"), "editors": editors}
+                      else:
+                          doc["programme"] = {"ref": refs[0], "unavailable": "programme issue could not be read"}
+          except Exception as error:  # noqa: BLE001 - the gate fails closed on this file
+              doc["unavailable"] = type(error).__name__
+          with open(out, "w", encoding="utf-8") as handle:
+              json.dump(doc, handle)
+          PY
 
       - name: Gate
         env:
@@ -78,6 +157,7 @@ jobs:
           AEOS_GATE_BUDGET_SECONDS: "45"
           AEOS_CEILING_SECONDS: "60"
           AEOS_SOFT_BUDGET_SECONDS: "10"
+          AEOS_ACTOR_EVIDENCE: ${{ runner.temp }}/aeos-actor-evidence.json
         run: |
           set -uo pipefail
           python3 -VV
@@ -86,7 +166,8 @@ jobs:
             python3 policy/aeos/merge_ready_gate.py \
               --candidate-dir candidate \
               --hard-budget-seconds "${AEOS_GATE_BUDGET_SECONDS}" \
-              --soft-budget-seconds "${AEOS_SOFT_BUDGET_SECONDS}"
+              --soft-budget-seconds "${AEOS_SOFT_BUDGET_SECONDS}" \
+              --evidence-file "${AEOS_ACTOR_EVIDENCE}"
           rc=$?
           set -e
           # 0 is PASS and 1 is a verdict the gate already reported with a typed
