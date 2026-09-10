@@ -229,6 +229,39 @@ operator signature.
 The exact bytes an operator signs for a candidate are `derivation_policy.expected_manifest(...)`
 — what the gate will recompute; an implementation lane posts them, the operator signs off-node.
 
+## The machine route — an admitted machine principal needs no operator signature
+
+Decided by agent-toolkit#3752 (ratified) and implemented as its Slice A. The signed-manifest
+conjunct above was compensation for a shared operator/machine identity. When the candidate is
+authored by a **separate, pinned machine principal** inside a **current operator-authored
+programme authority**, the gate admits a protected diff without an SSH signature. The gate
+stays networkless: the trusted workflow writes one `aeos-actor-evidence/v1` file from
+GitHub-authenticated facts under its own read-only token, and the gate judges that file.
+
+- **Principals.** `machine_route.machine_principals` (`{login: "<app>[bot]", type: "Bot"}`) and
+  `machine_route.operator_principals` (human logins) in `aeos/standing-governor-policy.json`;
+  the sets must be disjoint and unique or the policy is `GATE_CONFIG_INVALID`. Without the
+  block the route is off and only the signed route exists.
+- **Evidence** (written by the workflow, never the candidate): the pull request's author login
+  and type, the workflow actor, the head commit's author, and — for the programme the PR body
+  names with exactly one `<!-- aeos-programme: owner/repo#N -->` marker — that Issue's state,
+  author, body and content-edit history (`userContentEdits`). On `merge_group` the queued PR is
+  resolved from the queue's head ref. Every read failure is recorded as unavailable.
+- **All of these must hold**, each refusing with its own `MACHINE_ROUTE_*` reason inside the
+  `DERIVATION_POLICY_DIFF_UNSIGNED` detail: PR author, workflow actor and head-commit author are
+  the pinned machine principal and none is an operator principal; evidence repository equals the
+  candidate repository; the programme Issue is open, authored by an operator principal (type
+  User), and every recorded edit was by an operator principal (an unreadable history is not
+  "no edits"); its `standing-authority/v2` block names the same `owner/repo#N`, is `ACTIVE` and
+  unexpired; every protected changed path — both paths of a rename — is inside its
+  `path_envelope`. Absent or malformed evidence and events with no pull request are
+  unprovable.
+- **Fallback is closed, not open.** When the machine route refuses, the signed route is tried
+  and its refusal names both reasons. There is no ambient-identity fallback in the gate.
+- **Residual until #3752 M4.** A process still acting under the operator's own credential can
+  edit an operator-created Issue and would appear as an operator edit; identity separation of
+  the execution path is what removes that, which is why it is P0 there.
+
 ## Operator allowlist — `.github/aeos-gate.json` (optional)
 
 Some repositories deliberately commit credential-shaped literals as verified

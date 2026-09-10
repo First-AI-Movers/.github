@@ -688,15 +688,16 @@ class DerivationPolicyTestCase(unittest.TestCase):
         return "## Quiet child\n```standing-authority\n" + json.dumps(block, sort_keys=True) + "\n```\n"
 
     def evidence(self, *, author=None, author_type="Bot", programme=None, event="pull_request",
-                 repository=TARGET, pr_body=None, **programme_overrides) -> dict:
+                 repository=TARGET, pr_body=None, head_commit=None, **programme_overrides) -> dict:
         doc = {"schema": dp.EVIDENCE_SCHEMA, "event": event, "repository": repository, "actor": author or self.MACHINE}
         if event == "pull_request":
             doc["pull_request"] = {"number": 3760, "author_login": author or self.MACHINE, "author_type": author_type,
-                                   "head_sha": "0" * 40,
+                                   "head_sha": "0" * 40, "head_commit_author_login": head_commit or author or self.MACHINE,
                                    "body": pr_body if pr_body is not None else f"<!-- aeos-programme: {self.PROGRAMME_REF} -->"}
             if programme is not False:
                 doc["programme"] = {"ref": self.PROGRAMME_REF, "state": "open", "author_login": self.OPERATOR,
-                                    "author_type": "User", "body": self.programme_body(), "updated_at": "t"}
+                                    "author_type": "User", "body": self.programme_body(), "updated_at": "t",
+                                    "editors": [self.OPERATOR]}
                 doc["programme"].update(programme or {})
                 doc["programme"].update(programme_overrides)
         return doc
@@ -749,7 +750,14 @@ class DerivationPolicyTestCase(unittest.TestCase):
             dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE + "-read-failed": self.evidence(unavailable="could not read"),
             dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE + "-other-ref": self.evidence(ref=f"{TARGET}#99"),
             dp.MACHINE_ROUTE_PROGRAMME_NOT_OPEN: self.evidence(state="closed"),
-            dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR: self.evidence(author_login=self.MACHINE, author_type="Bot"),
+            dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR: self.evidence(author_login=self.MACHINE, programme={"author_type": "Bot"}),
+            dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR + "-operator-login-bot-type": self.evidence(programme={"author_type": "Bot"}),
+            dp.MACHINE_ROUTE_TRIGGER_NOT_MACHINE: dict(self.evidence(), actor=self.OPERATOR),
+            dp.MACHINE_ROUTE_TRIGGER_NOT_MACHINE + "-contributor-push": dict(self.evidence(), actor="contributor"),
+            dp.MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE: self.evidence(head_commit="contributor"),
+            dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR: self.evidence(editors=[self.OPERATOR, "contributor"]),
+            dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR + "-bot-edit": self.evidence(editors=[self.MACHINE]),
+            dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE + "-edit-history-unreadable": self.evidence(editors=None),
             dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR + "-other-human": self.evidence(author_login="contributor"),
             dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID: self.evidence(body="no block"),
             dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-v1": self.evidence(
@@ -762,7 +770,7 @@ class DerivationPolicyTestCase(unittest.TestCase):
             dp.MACHINE_ROUTE_AUTHORITY_EXPIRED: self.evidence(body=self.programme_body(not_after="2000-01-01T00:00:00Z")),
             dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE: self.evidence(body=self.programme_body(envelope=["docs/"])),
             dp.MACHINE_ROUTE_EVENT_UNPROVABLE: self.evidence(event="merge_group"),
-            dp.MACHINE_ROUTE_EVENT_UNPROVABLE + "-with-pr-block": dict(self.evidence(), event="merge_group"),
+            dp.MACHINE_ROUTE_EVENT_UNPROVABLE + "-push-event-with-pr-block": dict(self.evidence(), event="push"),
             dp.MACHINE_ROUTE_EVIDENCE_MALFORMED: b"{not json",
             dp.MACHINE_ROUTE_EVIDENCE_MALFORMED + "-schema": {"schema": "other"},
         }
@@ -774,10 +782,19 @@ class DerivationPolicyTestCase(unittest.TestCase):
                 dp.MACHINE_ROUTE_AUTHORITY_REF_MISMATCH, dp.MACHINE_ROUTE_REPOSITORY_MISMATCH,
                 dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE, dp.MACHINE_ROUTE_AUTHORITY_EXPIRED,
                 dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE, dp.MACHINE_ROUTE_EVENT_UNPROVABLE,
-                dp.MACHINE_ROUTE_EVIDENCE_MALFORMED) if label.startswith(t))
+                dp.MACHINE_ROUTE_EVIDENCE_MALFORMED, dp.MACHINE_ROUTE_TRIGGER_NOT_MACHINE,
+                dp.MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE,
+                dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR) if label.startswith(t))
             findings = self.route(head, doc)
             self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED], label)
             self.assertIn(token, findings[0][2], label)
+
+    def test_a_queued_merge_group_run_is_provable_when_the_workflow_resolved_the_queued_pr(self) -> None:
+        self.write_machine_policy()
+        head = self.protected_head()
+        self.assertEqual(self.route(head, dict(self.evidence(), event="merge_group")), [])
+        findings = self.route(head, {**self.evidence(programme=False), "event": "merge_group", "pull_request": None})
+        self.assertIn(dp.MACHINE_ROUTE_EVENT_UNPROVABLE, findings[0][2])
 
     def test_the_machine_route_covers_renames_and_deletions_by_both_paths(self) -> None:
         self.write_machine_policy()

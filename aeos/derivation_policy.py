@@ -789,6 +789,9 @@ MACHINE_ROUTE_EVIDENCE_MALFORMED = "MACHINE_ROUTE_EVIDENCE_MALFORMED"
 MACHINE_ROUTE_EVENT_UNPROVABLE = "MACHINE_ROUTE_EVENT_UNPROVABLE"
 MACHINE_ROUTE_ACTOR_NOT_MACHINE = "MACHINE_ROUTE_ACTOR_NOT_MACHINE"
 MACHINE_ROUTE_ACTOR_IS_OPERATOR = "MACHINE_ROUTE_ACTOR_IS_OPERATOR"
+MACHINE_ROUTE_TRIGGER_NOT_MACHINE = "MACHINE_ROUTE_TRIGGER_NOT_MACHINE"
+MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE = "MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE"
+MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR = "MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR"
 MACHINE_ROUTE_PROGRAMME_ABSENT = "MACHINE_ROUTE_PROGRAMME_ABSENT"
 MACHINE_ROUTE_PROGRAMME_UNAVAILABLE = "MACHINE_ROUTE_PROGRAMME_UNAVAILABLE"
 MACHINE_ROUTE_PROGRAMME_NOT_OPEN = "MACHINE_ROUTE_PROGRAMME_NOT_OPEN"
@@ -878,7 +881,10 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         return MACHINE_ROUTE_DISABLED
     if evidence is None:
         return evidence_reason or MACHINE_ROUTE_EVIDENCE_ABSENT
-    if evidence.get("event") != "pull_request" or not isinstance(evidence.get("pull_request"), dict):
+    # A merge-group run is provable only when the workflow resolved the queued PR itself
+    # (from the queue's head ref) and recorded it as authenticated pull-request evidence.
+    if (evidence.get("event") not in ("pull_request", "merge_group")
+            or not isinstance(evidence.get("pull_request"), dict)):
         return MACHINE_ROUTE_EVENT_UNPROVABLE
     pr = evidence["pull_request"]
     login, kind = pr.get("author_login"), pr.get("author_type")
@@ -888,6 +894,14 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         return MACHINE_ROUTE_ACTOR_IS_OPERATOR
     if (login, kind) not in policy.machine_principals:
         return MACHINE_ROUTE_ACTOR_NOT_MACHINE
+    machine_logins = {m for m, _ in policy.machine_principals}
+    # The PR author is not enough: a collaborator can push to a bot-authored PR, and the PR
+    # keeps its bot author. The workflow actor (who triggered this run) and the author of the
+    # head commit must both be the machine as well.
+    if evidence.get("actor") not in machine_logins:
+        return MACHINE_ROUTE_TRIGGER_NOT_MACHINE
+    if pr.get("head_commit_author_login") not in machine_logins:
+        return MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE
     if (evidence.get("repository") or "").strip().lower() != repository.strip().lower():
         return MACHINE_ROUTE_REPOSITORY_MISMATCH
     ref = programme_ref_from_body(pr.get("body", ""))
@@ -903,6 +917,14 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
     if (programme.get("author_login") not in policy.operator_principals
             or programme.get("author_type") != "User"):
         return MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR
+    # GitHub keeps the creator in `user` after any edit. The body is authoritative only when
+    # every recorded edit was made by an operator principal: the workflow records the Issue's
+    # content-edit history (GraphQL userContentEdits) and an unreadable history is not "none".
+    editors = programme.get("editors")
+    if not isinstance(editors, list) or any(not isinstance(e, str) for e in editors):
+        return MACHINE_ROUTE_PROGRAMME_UNAVAILABLE
+    if any(e not in policy.operator_principals for e in editors):
+        return MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR
     block = programme_block(programme.get("body", ""))
     if block is None:
         return MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID
