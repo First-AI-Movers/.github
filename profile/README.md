@@ -26,6 +26,12 @@ We do not build AI features for their own sake. We build outcomes that matter.
 | Founder website | <https://drhernanicosta.com> |
 | LinkedIn — Dr. Hernani Costa | <https://www.linkedin.com/in/hernani-costa-ai-ceo-firstaimovers/> |
 
+## Administration and licensing
+
+The First-AI-Movers GitHub organization is administered within the Hernani Holding B.V. GitHub Enterprise account.
+
+That is an administrative-parent fact about this GitHub organization. It is not proof of legal IP title for any repository. Copyright, ownership, and licensing are repository-specific — see each repository's `LICENSE` (and `NOTICE`, where present).
+
 ## Workstreams
 
 - **AI strategy and operating models.** Adoption roadmaps, capability mapping, and operating-model design that turn strategy into shipped systems.
