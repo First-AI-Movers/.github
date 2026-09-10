@@ -907,28 +907,32 @@ def evaluate(
     report.control_plane = control_plane_violations([c.path for c in changes], repository)
 
     # #3752 architecture lock 5, at the estate level: a MACHINE principal never edits its own
-    # judge. In this policy repository any control-plane change (the gate, the derivation policy,
-    # the workflow) authored by a pinned machine principal is a human verdict, whatever else the
-    # candidate passes — the App installation may reach this repository, the gate does not let it
-    # rewrite the facts it is judged by. Evidence is the trusted workflow's; absent evidence
-    # cannot be mistaken for a human author (fail closed on an unreadable author).
+    # judge. In this policy repository a control-plane change (the gate, the derivation policy,
+    # the workflow) is judged on its content ONLY when the trusted workflow's evidence positively
+    # identifies an operator: the PR author must be a pinned operator principal of type User and
+    # the run's actor must be an operator principal too. Any bot, any machine principal, an empty
+    # or unreadable author or actor inside PRESENT evidence — all refuse. Absent evidence (no file)
+    # is the pre-evidence workflow shape and is judged on content as before; the workflow on main
+    # always writes the file, so the reachable live shapes are the positive ones. This guard does
+    # not depend on `machine_route` being configured: a `[bot]` author is refused regardless.
     if report.control_plane and (repository or "").strip().lower() == POLICY_REPOSITORY:
         try:
             judge_policy = derivation_policy.load_policy(policy_dir)
         except derivation_policy.PolicyError:
             judge_policy = None
-        machine_logins = {m for m, _ in judge_policy.machine_principals} if judge_policy else set()
+        operators = set(judge_policy.operator_principals) if judge_policy else set()
         evidence, _reason = derivation_policy.load_evidence(evidence_path, candidate_dir=candidate_dir)
-        author = ((evidence or {}).get("pull_request") or {}).get("author_login") if isinstance(evidence, dict) else None
-        actor = (evidence or {}).get("actor") if isinstance(evidence, dict) else None
-        machine_touch = bool(machine_logins) and (author in machine_logins or actor in machine_logins
-                                                  or (isinstance(author, str) and author.endswith("[bot]")))
-        if machine_touch:
-            report.findings.append(Finding(
-                CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, sorted(report.control_plane)[0],
-                "a machine principal may never change the policy that judges it: "
-                f"author={author!r} actor={actor!r}; an operator opens this change",
-            ))
+        if isinstance(evidence, dict):
+            pull = evidence.get("pull_request") if isinstance(evidence.get("pull_request"), dict) else {}
+            author, kind, actor = pull.get("author_login"), pull.get("author_type"), evidence.get("actor")
+            identified_operator = (isinstance(author, str) and author in operators and kind == "User"
+                                   and isinstance(actor, str) and actor in operators)
+            if not identified_operator:
+                report.findings.append(Finding(
+                    CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, sorted(report.control_plane)[0],
+                    "only a positively identified operator may change the policy that judges machine "
+                    f"principals: author={author!r} ({kind!r}) actor={actor!r}",
+                ))
     strict = {p.lower() for p in report.control_plane}
 
     # Exemptions are read from the BASE commit either way, so a branch still

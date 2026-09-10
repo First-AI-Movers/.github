@@ -765,6 +765,7 @@ class DerivationPolicyTestCase(unittest.TestCase):
             dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR: self.evidence(editors=[self.OPERATOR, "contributor"]),
             dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR + "-bot-edit": self.evidence(editors=[self.MACHINE]),
             dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE + "-edit-history-unreadable": self.evidence(editors=None),
+            dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE + "-edit-history-over-bound": self.evidence(editors=[self.OPERATOR] * 101),
             dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR + "-other-human": self.evidence(author_login="contributor"),
             dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID: self.evidence(body="no block"),
             dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-v1": self.evidence(

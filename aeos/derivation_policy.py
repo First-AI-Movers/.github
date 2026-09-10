@@ -83,6 +83,9 @@ EVIDENCE_SCHEMA = "aeos-actor-evidence/v1"
 PROGRAMME_MARKER = "aeos-programme:"
 PROGRAMME_BLOCK_SCHEMA = "standing-authority/v2"
 MAX_EVIDENCE_BYTES = 512 * 1024
+MAX_PROGRAMME_EDITS = 100
+"""The gate's own bound on the edit history it will judge (the workflow records at most this many;
+a longer history is unavailable, not "operator-only by assumption")."""
 MAX_PROGRAMME_TTL_SECONDS = 14 * 24 * 3600
 """A programme block's `not_after` may lie at most this far ahead of the evaluation clock — the
 estate's ≤ 14-day ceiling bound (ADR §D15): an authority that a stolen or stale Issue body could
@@ -222,16 +225,17 @@ class Policy:
 
 
 def _parse_not_after(value, label: str):
+    """``label`` names the holder in messages (``signer <label>`` or ``programme``)."""
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"signer {label}: not_after must be a string or null")
+        raise ValueError(f"{label}: not_after must be a string or null")
     try:
         stamp = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ValueError(f"signer {label}: not_after is not ISO-8601: {exc}") from exc
+        raise ValueError(f"{label}: not_after is not ISO-8601: {exc}") from exc
     if stamp.tzinfo is None:
-        raise ValueError(f"signer {label}: not_after must carry a UTC offset")
+        raise ValueError(f"{label}: not_after must carry a UTC offset")
     return stamp.timestamp()
 
 
@@ -282,7 +286,7 @@ def parse_policy(raw: bytes) -> Policy:
                     f"signer {label}: fingerprint {signer['fingerprint']} is not the "
                     f"fingerprint of public_key ({computed})"
                 )
-            signer["not_after"] = _parse_not_after(signer.get("not_after"), label)
+            signer["not_after"] = _parse_not_after(signer.get("not_after"), f"signer {label}")
         policy = document.get("derivation_policy")
         if not isinstance(policy, dict):
             raise ValueError("derivation_policy must be an object")
@@ -875,7 +879,8 @@ def programme_block(body: str) -> dict | None:
         try:
             _safe_relpath(prefix.rstrip("/") or "/", "path_envelope")
         except ValueError:
-            return None  # absolute, traversing, empty-segment or backslash entries all land here
+            return None  # absolute, traversing and empty-segment entries land here; a backslash
+            # entry is accepted by the path rule and can never match a git path, so it is inert
     return block
 
 
@@ -940,7 +945,8 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
     # every recorded edit was made by an operator principal: the workflow records the Issue's
     # content-edit history (GraphQL userContentEdits) and an unreadable history is not "none".
     editors = programme.get("editors")
-    if not isinstance(editors, list) or any(not isinstance(e, str) for e in editors):
+    if (not isinstance(editors, list) or any(not isinstance(e, str) for e in editors)
+            or len(editors) > MAX_PROGRAMME_EDITS):
         return MACHINE_ROUTE_PROGRAMME_UNAVAILABLE
     if any(e not in policy.operator_principals for e in editors):
         return MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR

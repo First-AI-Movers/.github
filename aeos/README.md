@@ -262,11 +262,19 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   (`MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE`), so `scripts/agent_relay/` can never quietly
   authorise rewriting the ceiling parser; a malformed envelope entry anywhere invalidates the
   block; evidence that resolves inside the candidate tree is malformed.
-- **A machine principal never edits its own judge.** In this repository, a control-plane change
-  (`aeos/**`, the workflows) whose evidence names a machine principal — or any `[bot]` — as author
-  or actor is `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`, whatever else it passes; the App
-  installation may reach this repository, the gate does not let it rewrite the facts it is
-  judged by. (The operator-side complement is scoping the installation to selected repositories.)
+- **Only a positively identified operator edits the judge.** In this repository, a control-plane
+  change (`aeos/**`, the workflows) is judged on its content only when the trusted evidence names
+  a pinned operator principal (type User) as PR author and an operator principal as the run's
+  actor; a machine principal, any `[bot]`, or an empty/unreadable author or actor is
+  `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`, whatever else the candidate passes — the App
+  installation may reach this repository, the gate does not let it rewrite the facts it is judged
+  by, and this holds whether or not `machine_route` is configured. (The operator-side complement
+  is scoping the installation to selected repositories.)
+- **Operational rule.** The run's actor must be the machine principal too, so an operator who
+  reopens or un-drafts a machine-route PR flips its verdict to `MACHINE_ROUTE_TRIGGER_NOT_MACHINE`
+  until the machine pushes again; that is the correct answer for a push and the price of it for a
+  reopen. A non-root protected member under a directory-prefix entry is the route's intended
+  power: the ceiling on that power is the root's own exact-entry rule.
 - **Fallback is closed, not open.** When the machine route refuses, the signed route is tried
   and its refusal names both reasons. There is no ambient-identity fallback in the gate.
 - **Residual until #3752 M4.** A process still acting under the operator's own credential can

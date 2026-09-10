@@ -156,6 +156,31 @@ class GateTestCase(unittest.TestCase):
         report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir,
                                evidence_path=self._evidence_file("other[bot]"))
         self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+        # positive identification is required on BOTH author and actor: an operator author with a
+        # machine actor, an operator author of type Bot, an empty author, or a human who is not a
+        # pinned operator all refuse; absent evidence (the pre-evidence workflow) judges on content
+        for author, kind, actor in (("hpcosta", "User", "aeos-autonomous-main[bot]"), ("hpcosta", "Bot", "hpcosta"),
+                                    ("", "User", "hpcosta"), ("contributor", "User", "contributor"),
+                                    ("hpcosta", "User", "")):
+            path = self._evidence_file(author, kind)
+            with open(path, encoding="utf-8") as handle:
+                doc = json.load(handle)
+            doc["actor"] = actor
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(doc, handle)
+            report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir, evidence_path=path)
+            self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings}, (author, kind, actor))
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir, evidence_path=None)
+        self.assertNotIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+        # the guard does not depend on machine_route: with it removed a bot is still refused
+        with open(os.path.join(policy_dir, derivation_policy.POLICY_FILE), encoding="utf-8") as handle:
+            document = json.load(handle)
+        document.pop("machine_route")
+        with open(os.path.join(policy_dir, derivation_policy.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir,
+                               evidence_path=self._evidence_file("aeos-autonomous-main[bot]"))
+        self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
         report = self.run_gate(head, repository="First-AI-Movers/example", policy_dir=policy_dir,
                                evidence_path=self._evidence_file("aeos-autonomous-main[bot]"))
         self.assertNotIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
