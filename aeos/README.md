@@ -256,6 +256,17 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   unexpired; every protected changed path — both paths of a rename — is inside its
   `path_envelope`. Absent or malformed evidence and events with no pull request are
   unprovable.
+- **Bounds a stolen or stale Issue cannot exceed.** `not_after` may lie at most 14 days ahead of
+  the gate's clock (`MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED`); a declared derivation **root** is
+  admitted only by an exact-path envelope entry, never by a directory prefix
+  (`MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE`), so `scripts/agent_relay/` can never quietly
+  authorise rewriting the ceiling parser; a malformed envelope entry anywhere invalidates the
+  block; evidence that resolves inside the candidate tree is malformed.
+- **A machine principal never edits its own judge.** In this repository, a control-plane change
+  (`aeos/**`, the workflows) whose evidence names a machine principal — or any `[bot]` — as author
+  or actor is `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`, whatever else it passes; the App
+  installation may reach this repository, the gate does not let it rewrite the facts it is
+  judged by. (The operator-side complement is scoping the installation to selected repositories.)
 - **Fallback is closed, not open.** When the machine route refuses, the signed route is tried
   and its refusal names both reasons. There is no ambient-identity fallback in the gate.
 - **Residual until #3752 M4.** A process still acting under the operator's own credential can

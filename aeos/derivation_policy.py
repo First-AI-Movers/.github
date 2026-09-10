@@ -83,6 +83,10 @@ EVIDENCE_SCHEMA = "aeos-actor-evidence/v1"
 PROGRAMME_MARKER = "aeos-programme:"
 PROGRAMME_BLOCK_SCHEMA = "standing-authority/v2"
 MAX_EVIDENCE_BYTES = 512 * 1024
+MAX_PROGRAMME_TTL_SECONDS = 14 * 24 * 3600
+"""A programme block's `not_after` may lie at most this far ahead of the evaluation clock — the
+estate's ≤ 14-day ceiling bound (ADR §D15): an authority that a stolen or stale Issue body could
+carry forever is not a current authority."""
 """The machine route (#3752 Slice A). The trusted workflow — never the candidate — writes one
 ``aeos-actor-evidence/v1`` file: the GitHub-authenticated pull-request author (login, type),
 the workflow actor, and the programme Issue the candidate's body names with
@@ -802,13 +806,22 @@ MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE = "MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE"
 MACHINE_ROUTE_AUTHORITY_EXPIRED = "MACHINE_ROUTE_AUTHORITY_EXPIRED"
 MACHINE_ROUTE_REPOSITORY_MISMATCH = "MACHINE_ROUTE_REPOSITORY_MISMATCH"
 MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE = "MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE"
+MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE = "MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE"
+MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED = "MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED"
 
 
-def load_evidence(path: str | None) -> tuple[dict | None, str | None]:
+def load_evidence(path: str | None, *, candidate_dir: str | None = None) -> tuple[dict | None, str | None]:
     """``(evidence, reason)``: the trusted workflow's evidence document, or a typed reason why
-    the machine route cannot be evaluated. Never raises; absence is a reason, not a pass."""
+    the machine route cannot be evaluated. Never raises; absence is a reason, not a pass. A path
+    that resolves inside the candidate tree is refused: evidence is the workflow's, never the
+    candidate's, even when no candidate code runs."""
     if not path:
         return None, MACHINE_ROUTE_EVIDENCE_ABSENT
+    if candidate_dir:
+        real = os.path.realpath(path)
+        root = os.path.realpath(candidate_dir)
+        if real == root or real.startswith(root.rstrip(os.sep) + os.sep):
+            return None, MACHINE_ROUTE_EVIDENCE_MALFORMED
     try:
         with open(path, "rb") as handle:
             raw = handle.read(MAX_EVIDENCE_BYTES + 1)
@@ -856,17 +869,25 @@ def programme_block(body: str) -> dict | None:
             or not isinstance(block["path_envelope"], list) or not block["path_envelope"]
             or any(not isinstance(p, str) or not p for p in block["path_envelope"])):
         return None
-    return block
-
-
-def _within_envelope(path: str, envelope: list[str]) -> bool:
-    for prefix in envelope:
+    # The WHOLE envelope is validated here, once, so a malformed entry anywhere in the list
+    # invalidates the block regardless of where a matching entry sits.
+    for prefix in block["path_envelope"]:
         try:
             _safe_relpath(prefix.rstrip("/") or "/", "path_envelope")
         except ValueError:
-            return False
+            return None
+        if prefix == "/" or prefix.startswith("/") or "\\" in prefix:
+            return None
+    return block
+
+
+def _within_envelope(path: str, envelope: list[str], *, exact_only: bool = False) -> bool:
+    """Prefix entries end with ``/``; every other entry is an exact file. A declared derivation
+    ROOT (``exact_only``) is admitted only by an exact entry: a directory prefix such as
+    ``scripts/agent_relay/`` must never silently authorise rewriting the ceiling parser itself."""
+    for prefix in envelope:
         if prefix.endswith("/"):
-            if path.startswith(prefix):
+            if not exact_only and path.startswith(prefix):
                 return True
         elif path == prefix:
             return True
@@ -940,9 +961,17 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         return MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID
     if not_after is None or now >= not_after:
         return MACHINE_ROUTE_AUTHORITY_EXPIRED
+    if not_after - now > MAX_PROGRAMME_TTL_SECONDS:
+        return MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED
+    roots = set(policy.roots)
     for entry in entries:
         for path in (entry.path, entry.rename_from):
-            if path is not None and not _within_envelope(path, block["path_envelope"]):
+            if path is None:
+                continue
+            if path in roots:
+                if not _within_envelope(path, block["path_envelope"], exact_only=True):
+                    return MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE
+            elif not _within_envelope(path, block["path_envelope"]):
                 return MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE
     return None
 
@@ -988,7 +1017,7 @@ def evaluate_derivation_policy(
     # Route 1 — the machine route: an admitted machine principal executing inside a current
     # operator-authored programme authority needs no operator signature (#3752).
     stamp = now()
-    evidence, evidence_reason = load_evidence(evidence_path)
+    evidence, evidence_reason = load_evidence(evidence_path, candidate_dir=candidate_dir)
     route_reason = machine_route(policy, evidence, evidence_reason, repository, entries, stamp)
     if route_reason is None:
         return findings

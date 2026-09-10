@@ -680,8 +680,15 @@ class DerivationPolicyTestCase(unittest.TestCase):
         with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
             json.dump(self.machine_policy(**kwargs), handle)
 
-    def programme_body(self, *, state="ACTIVE", not_after="2999-01-01T00:00:00Z", envelope=None,
+    @staticmethod
+    def days_ahead(days: float) -> str:
+        import datetime as _dt
+        stamp = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=days)
+        return stamp.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def programme_body(self, *, state="ACTIVE", not_after=None, envelope=None,
                        repository=TARGET, issue=3732) -> str:
+        not_after = not_after or self.days_ahead(7)
         block = {"schema": "standing-authority/v2", "state": state, "repository": repository, "issue": issue,
                  "programme_id": "at-1951-standing", "serial": 3, "not_after": not_after,
                  "path_envelope": envelope or ["scripts/agent_relay/", "tests/agent_relay/"], "signature": ""}
@@ -768,6 +775,12 @@ class DerivationPolicyTestCase(unittest.TestCase):
                 body=self.programme_body(repository="First-AI-Movers/other")),
             dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE: self.evidence(body=self.programme_body(state="PAUSED")),
             dp.MACHINE_ROUTE_AUTHORITY_EXPIRED: self.evidence(body=self.programme_body(not_after="2000-01-01T00:00:00Z")),
+            dp.MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED: self.evidence(body=self.programme_body(not_after=self.days_ahead(15))),
+            dp.MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED + "-forever": self.evidence(body=self.programme_body(not_after="9999-12-31T23:59:59Z")),
+            dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-traversal-after-a-match": self.evidence(
+                body=self.programme_body(envelope=["scripts/agent_relay/", "../"])),
+            dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-absolute-entry": self.evidence(
+                body=self.programme_body(envelope=["/scripts/agent_relay/"])),
             dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE: self.evidence(body=self.programme_body(envelope=["docs/"])),
             dp.MACHINE_ROUTE_EVENT_UNPROVABLE: self.evidence(event="merge_group"),
             dp.MACHINE_ROUTE_EVENT_UNPROVABLE + "-push-event-with-pr-block": dict(self.evidence(), event="push"),
@@ -783,6 +796,7 @@ class DerivationPolicyTestCase(unittest.TestCase):
                 dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE, dp.MACHINE_ROUTE_AUTHORITY_EXPIRED,
                 dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE, dp.MACHINE_ROUTE_EVENT_UNPROVABLE,
                 dp.MACHINE_ROUTE_EVIDENCE_MALFORMED, dp.MACHINE_ROUTE_TRIGGER_NOT_MACHINE,
+                dp.MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED, dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE,
                 dp.MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE,
                 dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR) if label.startswith(t))
             findings = self.route(head, doc)
@@ -795,6 +809,50 @@ class DerivationPolicyTestCase(unittest.TestCase):
         self.assertEqual(self.route(head, dict(self.evidence(), event="merge_group")), [])
         findings = self.route(head, {**self.evidence(programme=False), "event": "merge_group", "pull_request": None})
         self.assertIn(dp.MACHINE_ROUTE_EVENT_UNPROVABLE, findings[0][2])
+
+    def test_a_declared_root_is_admitted_only_by_an_exact_envelope_entry(self) -> None:
+        # Review F3: a directory prefix must never silently authorise rewriting the ceiling parser.
+        self.write_machine_policy()
+        self.repo.write(Repo.ROOT, "def check(x):\n    return True\n")
+        head = self.repo.commit("rewrite the derivation root")
+        findings = self.route(head, self.evidence(body=self.programme_body(envelope=["scripts/agent_relay/"])))
+        self.assertIn(dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE, findings[0][2])
+        findings = self.route(head, self.evidence(body=self.programme_body(envelope=["scripts/"])))
+        self.assertIn(dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE, findings[0][2])
+        self.assertEqual(self.route(head, self.evidence(body=self.programme_body(envelope=[Repo.ROOT]))), [])
+        # a non-root member is still admitted by the prefix
+        self.repo.write("scripts/agent_relay/models.py", "X = 5\n")
+        head = self.repo.commit("also touch a non-root member")
+        findings = self.route(head, self.evidence(body=self.programme_body(envelope=["scripts/agent_relay/"])))
+        self.assertIn(dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE, findings[0][2])
+        self.assertEqual(self.route(head, self.evidence(body=self.programme_body(envelope=["scripts/agent_relay/", Repo.ROOT]))), [])
+
+    def test_evidence_inside_the_candidate_tree_is_refused(self) -> None:
+        # Review F8: evidence is the workflow's, never the candidate's.
+        self.write_machine_policy()
+        head = self.protected_head()
+        inside = os.path.join(self.repo.root, "evidence.json")
+        with open(inside, "w", encoding="utf-8") as handle:
+            json.dump(self.evidence(), handle)
+        findings = dp.evaluate_derivation_policy(self.repo.root, TARGET, self.repo.base, head, self.policy_dir,
+                                                 evidence_path=inside)
+        self.assertIn(dp.MACHINE_ROUTE_EVIDENCE_MALFORMED, findings[0][2])
+        link = os.path.join(self.policy_dir, "evidence-link.json")
+        os.symlink(inside, link)
+        findings = dp.evaluate_derivation_policy(self.repo.root, TARGET, self.repo.base, head, self.policy_dir,
+                                                 evidence_path=link)
+        self.assertIn(dp.MACHINE_ROUTE_EVIDENCE_MALFORMED, findings[0][2])
+
+    def test_the_workflow_marker_regex_matches_the_policy_regex(self) -> None:
+        # Review F6: the evidence step carries a second copy of the marker pattern; keep them equal.
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        with open(os.path.join(root, ".github", "workflows", "aeos-merge-ready.yml"), encoding="utf-8") as handle:
+            workflow = handle.read()
+        import re as _re
+        embedded = _re.search(r're\.findall\(r"(.*?)", body\)', workflow)
+        self.assertIsNotNone(embedded)
+        self.assertEqual(embedded.group(1), dp._PROGRAMME_MARKER_RE.pattern)
+        self.assertIn("--evidence-file", workflow)
 
     def test_the_machine_route_covers_renames_and_deletions_by_both_paths(self) -> None:
         self.write_machine_policy()

@@ -905,6 +905,30 @@ def evaluate(
     # floors specific to the merge-control surface it changes, by the trusted
     # policy resolved from the base commit. It is judged, not deferred.
     report.control_plane = control_plane_violations([c.path for c in changes], repository)
+
+    # #3752 architecture lock 5, at the estate level: a MACHINE principal never edits its own
+    # judge. In this policy repository any control-plane change (the gate, the derivation policy,
+    # the workflow) authored by a pinned machine principal is a human verdict, whatever else the
+    # candidate passes — the App installation may reach this repository, the gate does not let it
+    # rewrite the facts it is judged by. Evidence is the trusted workflow's; absent evidence
+    # cannot be mistaken for a human author (fail closed on an unreadable author).
+    if report.control_plane and (repository or "").strip().lower() == POLICY_REPOSITORY:
+        try:
+            judge_policy = derivation_policy.load_policy(policy_dir)
+        except derivation_policy.PolicyError:
+            judge_policy = None
+        machine_logins = {m for m, _ in judge_policy.machine_principals} if judge_policy else set()
+        evidence, _reason = derivation_policy.load_evidence(evidence_path, candidate_dir=candidate_dir)
+        author = ((evidence or {}).get("pull_request") or {}).get("author_login") if isinstance(evidence, dict) else None
+        actor = (evidence or {}).get("actor") if isinstance(evidence, dict) else None
+        machine_touch = bool(machine_logins) and (author in machine_logins or actor in machine_logins
+                                                  or (isinstance(author, str) and author.endswith("[bot]")))
+        if machine_touch:
+            report.findings.append(Finding(
+                CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, sorted(report.control_plane)[0],
+                "a machine principal may never change the policy that judges it: "
+                f"author={author!r} actor={actor!r}; an operator opens this change",
+            ))
     strict = {p.lower() for p in report.control_plane}
 
     # Exemptions are read from the BASE commit either way, so a branch still
