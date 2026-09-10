@@ -875,9 +875,7 @@ def programme_block(body: str) -> dict | None:
         try:
             _safe_relpath(prefix.rstrip("/") or "/", "path_envelope")
         except ValueError:
-            return None
-        if prefix == "/" or prefix.startswith("/") or "\\" in prefix:
-            return None
+            return None  # absolute, traversing, empty-segment or backslash entries all land here
     return block
 
 
