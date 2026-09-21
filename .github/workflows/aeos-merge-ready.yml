@@ -81,7 +81,9 @@ jobs:
         run: |
           set -uo pipefail
           python3 - <<'PY'
-          import json, os, re, subprocess
+          import json, os, re, subprocess, sys, time
+          sys.path.insert(0, os.path.abspath('policy/aeos'))
+          import derivation_policy
           out = os.environ["AEOS_ACTOR_EVIDENCE"]
           repo = os.environ.get("AEOS_REPOSITORY", "")
           event_name = os.environ.get("AEOS_EVENT_NAME", "")
@@ -128,6 +130,11 @@ jobs:
                           doc["programme"] = {"ref": refs[0], "state": issue.get("state"), "author_login": iu.get("login"),
                                               "author_type": iu.get("type"), "body": issue.get("body") or "",
                                               "updated_at": issue.get("updated_at"), "editors": editors}
+                          trusted = derivation_policy.load_policy('policy/aeos')
+                          operand = getattr(trusted, 'comment_operand', None)
+                          if operand is not None and operand['programme'] == refs[0]:
+                              import comment_operand
+                              doc['comment_sources'] = comment_operand.collect(operand, api, time.time())
                       else:
                           doc["programme"] = {"ref": refs[0], "unavailable": "programme issue could not be read"}
           except Exception as error:  # noqa: BLE001 - the gate fails closed on this file

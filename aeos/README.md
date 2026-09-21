@@ -281,6 +281,58 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   edit an operator-created Issue and would appear as an operator edit; identity separation of
   the execution path is what removes that, which is why it is P0 there.
 
+### Constrained comment source operand
+
+The optional `machine_route.comment_operand` is one reviewed lowering in the
+**trusted policy**, not a candidate grant or a prose interpreter. It is absent
+from the shipped policy. Adding a real operand requires the existing policy
+review path and authenticated programme/admission/registration lineage; this
+adapter does not infer that lineage or create admission or continuation state.
+The original operator ratification remains the authority source. A later bot
+receipt may be evidence of admission or registration, never operator ratification.
+
+`aeos-comment-operand/v1` has exactly these fields:
+
+| Field | Binding |
+| --- | --- |
+| `schema` | `aeos-comment-operand/v1` |
+| `programme` | Exact `owner/repo#N` |
+| `scope` | `repository-code` only |
+| `generation` | `programme + "@sha256:" + SHA256(canonical remaining fields)` |
+| `sources` | Exactly three ordered records: `ratification`, `admission`, `registration` |
+| `authority`, `ceiling` | Exact six-field `standing-authority/v2` objects: schema, state, repository, issue, not_after, path_envelope |
+
+Each source has exactly `role`, `ref`, `comment_id`, `issue_body_sha256`,
+`comment_body_sha256`, and `frontier_sha256`. Comment identities must be distinct;
+ratification belongs to the programme. Both authority objects must name that
+programme and be ACTIVE. Authority expiry cannot exceed the reviewed ceiling;
+its envelope is a subset of the ceiling's exact files, without directory grants.
+The generation is an operand version, not a runtime seat or generation store.
+Canonical JSON uses sorted keys, compact separators and UTF-8 without ASCII
+escaping; body hashes cover exact UTF-8 bytes. The frontier hashes the complete,
+ascending comment list projected to `id`, `body_sha256`, `author_login`,
+`author_type`, `updated_at`.
+
+The existing read-only workflow API collects these sources twice and requires
+equal snapshots, complete edit histories and at most 100 comments per source.
+The networkless gate accepts facts at most 300 seconds old. Every source Issue
+must be open and operator-authored with only operator edits. Selected comments
+must be unedited; ratification must be by a pinned User operator, while admission
+and registration may also be by a pinned machine principal. Exact body hashes,
+source identities and the whole frontier must match the independently reviewed
+policy. Any subsequent comment, deletion, edit, revocation or supersession
+changes the frontier and refuses the old binding. This conservative design
+requires a fresh reviewed operand after even an unrelated comment; it never
+guesses whether later prose revokes authority.
+
+Missing, untrusted, stale or ambiguous facts refuse with the existing
+`MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID`; malformed policy is `GATE_CONFIG_INVALID`.
+A body authority block alongside the bound comment source is ambiguous and
+refused. With no operand for that programme, the legacy Issue-body path is
+unchanged. Normalized input reuses the existing principal, repository, expiry,
+root and changed-path checks; signed routes and the predecessor judge remain
+unchanged. No active source, route, runtime action or provider effect is installed.
+
 ## Operator allowlist — `.github/aeos-gate.json` (optional)
 
 Some repositories deliberately commit credential-shaped literals as verified

@@ -68,6 +68,8 @@ import subprocess
 import tempfile
 import time
 
+import comment_operand
+
 DERIVATION_POLICY_DIFF_UNSIGNED = "DERIVATION_POLICY_DIFF_UNSIGNED"
 DERIVATION_POLICY_MANIFEST_INCOMPLETE = "DERIVATION_POLICY_MANIFEST_INCOMPLETE"
 DERIVATION_POLICY_DRIFT = "DERIVATION_POLICY_DRIFT"
@@ -190,6 +192,7 @@ class Policy:
         "signature_path",
         "machine_principals",
         "operator_principals",
+        "comment_operand",
     )
 
     def __init__(self, document: dict) -> None:
@@ -210,6 +213,7 @@ class Policy:
             (m["login"], m["type"]) for m in route.get("machine_principals", ())
         )
         self.operator_principals = frozenset(route.get("operator_principals", ()))
+        self.comment_operand = route.get("comment_operand")
 
     @property
     def machine_route_enabled(self) -> bool:
@@ -313,8 +317,8 @@ def parse_policy(raw: bytes) -> Policy:
         route = document.get("machine_route")
         if route is not None:
             if (not isinstance(route, dict)
-                    or set(route) - {"machine_principals", "operator_principals", "decision"}):
-                raise ValueError("machine_route must carry only machine_principals, operator_principals and a decision note")
+                    or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand"}):
+                raise ValueError("machine_route has unknown keys")
             machines = route.get("machine_principals")
             operators = route.get("operator_principals")
             if (not isinstance(machines, list) or not machines or not isinstance(operators, list) or not operators):
@@ -334,6 +338,8 @@ def parse_policy(raw: bytes) -> Policy:
             if set(logins) & set(operators) or len(set(logins)) != len(logins) or len(set(operators)) != len(operators):
                 # Identity separation is the whole point: one login can never be both.
                 raise ValueError("machine and operator principals must be disjoint and unique")
+            if "comment_operand" in route:
+                comment_operand.validate(route["comment_operand"], programme_block)
         return Policy(document)
     except (KeyError, TypeError, ValueError) as exc:
         raise PolicyError(GATE_CONFIG_INVALID, POLICY_FILE, f"policy is invalid: {exc}")
@@ -950,7 +956,11 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         return MACHINE_ROUTE_PROGRAMME_UNAVAILABLE
     if any(e not in policy.operator_principals for e in editors):
         return MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR
-    block = programme_block(programme.get("body", ""))
+    body = programme.get("body", "")
+    operand = policy.comment_operand
+    if operand is not None and operand.get("programme") == ref:
+        body = comment_operand.resolve(operand, evidence, programme, policy, programme_block, now)
+    block = programme_block(body)
     if block is None:
         return MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID
     if f"{block['repository']}#{block['issue']}" != ref:
