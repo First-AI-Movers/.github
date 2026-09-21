@@ -12,7 +12,8 @@ import json
 import re
 
 SCHEMA = 'aeos-comment-operand/v1'
-MAX_COMMENTS = 100
+MAX_COMMENTS = 1000
+MAX_PAGES = 10
 MAX_AGE_SECONDS = 300
 REF = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*\Z')
 SHA = re.compile(r'[0-9a-f]{64}\Z')
@@ -138,9 +139,11 @@ def resolve(operand, evidence, programme, policy, parser, now):
         return None
 
 
-QUERY = '''query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){
-body state author{login __typename} userContentEdits(first:100){totalCount nodes{editor{login}}}
-comments(first:100){totalCount nodes{databaseId body createdAt updatedAt author{login __typename}
+QUERY = '''query($o:String!,$n:String!,$i:Int!,$cursor:String){repository(owner:$o,name:$n){issue(number:$i){
+id number repository{nameWithOwner} body state author{login __typename}
+userContentEdits(first:100){totalCount nodes{editor{login __typename}}}
+comments(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor}
+nodes{databaseId body createdAt updatedAt isMinimized author{login __typename}
 userContentEdits(first:1){totalCount}}}}}}'''
 
 
@@ -153,19 +156,54 @@ def collect(operand, api, observed_at):
     def read(binding):
         repo, number = binding['ref'].split('#')
         owner, name = repo.split('/')
-        response = api('graphql', '-f', 'query=' + QUERY, '-f', 'o=' + owner,
-                       '-f', 'n=' + name, '-F', 'i=' + number)
-        if not isinstance(response, dict) or response.get('errors'):
-            raise ValueError('source unavailable')
-        issue = response['data']['repository']['issue']
+        cursor, header, total = None, None, None
+        cursors, nodes, ids = set(), [], set()
+        while True:
+            if len(cursors) >= MAX_PAGES:
+                raise ValueError('source page budget exceeded')
+            args = ('-f', 'cursor=' + cursor) if cursor is not None else ()
+            response = api('graphql', '-f', 'query=' + QUERY, '-f', 'o=' + owner,
+                           '-f', 'n=' + name, '-F', 'i=' + number, *args)
+            if not isinstance(response, dict) or response.get('errors'):
+                raise ValueError('source unavailable')
+            issue = response['data']['repository']['issue']
+            if (issue['repository']['nameWithOwner'] != repo or type(issue['number']) is not int
+                    or issue['number'] != int(number) or not isinstance(issue['id'], str) or not issue['id']):
+                raise ValueError('foreign source')
+            current = {k: v for k, v in issue.items() if k != 'comments'}
+            connection = issue['comments']
+            count = connection['totalCount']
+            if type(count) is not int or not 1 <= count <= MAX_COMMENTS:
+                raise ValueError('source frontier bound')
+            if header is not None and (current != header or count != total):
+                raise ValueError('source changed between pages')
+            header, total = current, count
+            page, info = connection['nodes'], connection['pageInfo']
+            if (not isinstance(page, list) or not 1 <= len(page) <= 100
+                    or type(info['hasNextPage']) is not bool
+                    or not isinstance(info['endCursor'], str) or not info['endCursor']
+                    or info['endCursor'] in cursors):
+                raise ValueError('source page incomplete')
+            for node in page:
+                ident = node['databaseId']
+                if (type(ident) is not int or ident <= 0 or ident in ids
+                        or (nodes and ident <= nodes[-1]['databaseId']) or node['isMinimized'] is not False):
+                    raise ValueError('source comment hidden or ambiguous')
+                ids.add(ident)
+                nodes.append(node)
+            if len(nodes) > total or info['hasNextPage'] != (len(nodes) < total):
+                raise ValueError('source frontier incomplete')
+            cursors.add(info['endCursor'])
+            if not info['hasNextPage']:
+                break
+            cursor = info['endCursor']
         edits = issue['userContentEdits']
-        if edits['totalCount'] != len(edits['nodes']) or len(edits['nodes']) > 100:
+        if (type(edits['totalCount']) is not int or edits['totalCount'] != len(edits['nodes'])
+                or len(edits['nodes']) > 100
+                or any(n['editor']['__typename'] != 'User' for n in edits['nodes'])):
             raise ValueError('source edit history incomplete')
-        connection = issue['comments']
-        if connection['totalCount'] != len(connection['nodes']) or len(connection['nodes']) > MAX_COMMENTS:
-            raise ValueError('source frontier incomplete')
         comments, selected = [], None
-        for node in connection['nodes']:
+        for node in nodes:
             row = dict(id=node['databaseId'], body_sha256=body_digest(node['body']),
                        author_login=node['author']['login'], author_type=node['author']['__typename'],
                        updated_at=node['updatedAt'])
@@ -173,19 +211,23 @@ def collect(operand, api, observed_at):
             if row['id'] == binding['comment_id']:
                 if selected is not None:
                     raise ValueError('duplicate selected source')
-                if node['userContentEdits']['totalCount'] != 0:
+                if type(node['userContentEdits']['totalCount']) is not int or node['userContentEdits']['totalCount'] != 0:
                     raise ValueError('selected source edited')
                 selected = dict(row, body=node['body'], created_at=node['createdAt'], editors=[])
-        return dict(ref=binding['ref'], state=issue['state'].lower(), body=issue['body'],
+        if selected is None:
+            raise ValueError('selected source absent')
+        fact = dict(ref=binding['ref'], state=issue['state'].lower(), body=issue['body'],
                     author_login=issue['author']['login'], author_type=issue['author']['__typename'],
                     editors=[n['editor']['login'] for n in edits['nodes']], comments=comments,
-                    comments_total=connection['totalCount'], selected=selected)
+                    comments_total=total, selected=selected)
+        # Compare the immutable Issue identity too, without changing the v1 operand.
+        return fact, issue['id']
 
     try:
         first = [read(s) for s in operand['sources']]
         second = [read(s) for s in operand['sources']]
         if first != second:
             raise ValueError('source moved')
-        return dict(observed_at=observed_at, sources=second)
+        return dict(observed_at=observed_at, sources=[fact for fact, _identity in second])
     except (KeyError, TypeError, ValueError, AttributeError):
         return {'unavailable': 'COMMENT_SOURCE_UNAVAILABLE'}

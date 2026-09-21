@@ -190,11 +190,14 @@ class CommentOperandTests(unittest.TestCase):
         number = int(next(a[2:] for a in args if a.startswith('i=')))
         fact = self.facts[number - 7]
         node = fact['selected']
-        issue = dict(body=fact['body'], state='OPEN', author=dict(login='operator', __typename='User'),
-                     userContentEdits=dict(totalCount=0, nodes=[]), comments=dict(totalCount=1, nodes=[
+        issue = dict(id='issue-' + str(number), number=number, repository={'nameWithOwner': self.repo},
+                     body=fact['body'], state='OPEN', author=dict(login='operator', __typename='User'),
+                     userContentEdits=dict(totalCount=0, nodes=[]), comments=dict(totalCount=1,
+                     pageInfo=dict(hasNextPage=False, endCursor='end'), nodes=[
                          dict(databaseId=node['id'], body=node['body'], createdAt=node['created_at'],
                               updatedAt=node['updated_at'], author=dict(login=node['author_login'],
-                              __typename=node['author_type']), userContentEdits=dict(totalCount=0))]))
+                              __typename=node['author_type']), isMinimized=False,
+                              userContentEdits=dict(totalCount=0))]))
         return dict(data=dict(repository=dict(issue=issue)))
 
     def test_collected_facts_enter_real_machine_route(self):

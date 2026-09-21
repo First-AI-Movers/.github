@@ -314,7 +314,20 @@ ascending comment list projected to `id`, `body_sha256`, `author_login`,
 `author_type`, `updated_at`.
 
 The existing read-only workflow API collects these sources twice and requires
-equal snapshots, complete edit histories and at most 100 comments per source.
+equal complete snapshots, including immutable Issue identity. Each observation
+follows authenticated GraphQL cursors through at most ten pages of 100 comments
+(1,000 comments per source). Every page must retain the same Issue identity,
+repository, body, state, author, edit history and total count. Cursors must advance
+without repetition; comment IDs must be positive, unique and increasing. A terminal
+page must account for the exact total; missing/partial pages, unknown pagination,
+hidden/minimized or deleted nodes and budget exhaustion are unavailable, never a
+partial frontier. Issue edit histories remain capped at 100 complete records and
+every editor must be a User; a missing/deleted editor or unknown type refuses.
+The selected comment must occur exactly once across the complete frontier and
+have a known integer zero edit count. The existing evidence-file byte cap still
+applies. Cursor/page boundaries are not authority: the v1 frontier hash continues
+to cover the same ordered row projection over **all** comments, and the operand
+shape, body/comment digests and generation formula are unchanged.
 The networkless gate accepts facts at most 300 seconds old. Every source Issue
 must be open and operator-authored with only operator edits. Selected comments
 must be unedited; ratification must be by a pinned User operator, while admission
