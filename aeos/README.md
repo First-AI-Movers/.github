@@ -247,6 +247,17 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   names with exactly one `<!-- aeos-programme: owner/repo#N -->` marker — that Issue's state,
   author, body and content-edit history (`userContentEdits`). On `merge_group` the queued PR is
   resolved from the queue's head ref. Every read failure is recorded as unavailable.
+- **M5 authority compilation.** `machine_route.authority_compiler`, when present, binds one
+  existing operator-authored programme by its exact `owner/repo#N` reference and its existing
+  `Policy / Programme ID`. It stores neither a path list nor a grant. Once that source has passed
+  the ordinary Issue-author/edit, repository, ACTIVE and expiry checks below, it compiles exactly
+  the protected paths in the candidate's already-recomputed diff. Those paths must remain inside
+  the existing derivation-policy allowlist; a candidate marker, candidate prose, bot edit, or a
+  path outside that outer boundary does not compile. This is the #3752 zero-crypto route for an
+  already-admitted programme, not a per-head signature, per-file callback or second authority
+  store. Programmes without this trusted binding retain their `standing-authority/v2.path_envelope`
+  route unchanged. Its required dogfood order is one #5277 machine-authorized protected change
+  first; #5280 may reuse the same generic compilation only after that readback.
 - **All of these must hold**, each refusing with its own `MACHINE_ROUTE_*` reason inside the
   `DERIVATION_POLICY_DIFF_UNSIGNED` detail: PR author, workflow actor and head-commit author are
   the pinned machine principal and none is an operator principal; evidence repository equals the

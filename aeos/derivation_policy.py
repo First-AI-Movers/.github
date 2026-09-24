@@ -84,6 +84,7 @@ SIGNATURE_NAMESPACE = "at-derivation-policy"
 EVIDENCE_SCHEMA = "aeos-actor-evidence/v1"
 PROGRAMME_MARKER = "aeos-programme:"
 PROGRAMME_BLOCK_SCHEMA = "standing-authority/v2"
+AUTHORITY_COMPILER_SCHEMA = "aeos-programme-authority-compiler/v1"
 MAX_EVIDENCE_BYTES = 512 * 1024
 MAX_PROGRAMME_EDITS = 100
 """The gate's own bound on the edit history it will judge (the workflow records at most this many;
@@ -130,6 +131,7 @@ _LABEL_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 _LOGIN_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})(?:\[bot\])?$")
 _PROGRAMME_REF_RE = re.compile(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)$")
 _PROGRAMME_MARKER_RE = re.compile(r"<!--\s*aeos-programme:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)\s*-->")
+_PROGRAMME_ID_RE = re.compile(r"^\*\*Policy / Programme ID:\*\* `([A-Z][A-Z0-9-]{2,127})`\s*$", re.M)
 _BLOCK_RE = re.compile(r"^```standing-authority[ \t]*\n(.*?)\n```[ \t]*(?:\n|$)", re.M | re.S)
 _PUBKEY_RE = re.compile(r"^(ssh-ed25519|ecdsa-sha2-nistp256|ssh-rsa) [A-Za-z0-9+/=]+$")
 
@@ -193,6 +195,7 @@ class Policy:
         "machine_principals",
         "operator_principals",
         "comment_operand",
+        "authority_compiler",
     )
 
     def __init__(self, document: dict) -> None:
@@ -214,6 +217,7 @@ class Policy:
         )
         self.operator_principals = frozenset(route.get("operator_principals", ()))
         self.comment_operand = route.get("comment_operand")
+        self.authority_compiler = route.get("authority_compiler")
 
     @property
     def machine_route_enabled(self) -> bool:
@@ -317,7 +321,7 @@ def parse_policy(raw: bytes) -> Policy:
         route = document.get("machine_route")
         if route is not None:
             if (not isinstance(route, dict)
-                    or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand"}):
+                    or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand", "authority_compiler"}):
                 raise ValueError("machine_route has unknown keys")
             machines = route.get("machine_principals")
             operators = route.get("operator_principals")
@@ -340,6 +344,16 @@ def parse_policy(raw: bytes) -> Policy:
                 raise ValueError("machine and operator principals must be disjoint and unique")
             if "comment_operand" in route:
                 comment_operand.validate(route["comment_operand"], programme_block)
+            if "authority_compiler" in route:
+                compiler = route["authority_compiler"]
+                if (not isinstance(compiler, dict)
+                        or set(compiler) != {"schema", "programme", "programme_id"}
+                        or compiler.get("schema") != AUTHORITY_COMPILER_SCHEMA
+                        or not isinstance(compiler.get("programme"), str)
+                        or not _PROGRAMME_REF_RE.fullmatch(compiler["programme"])
+                        or not isinstance(compiler.get("programme_id"), str)
+                        or not re.fullmatch(r"[A-Z][A-Z0-9-]{2,127}", compiler["programme_id"])):
+                    raise ValueError("authority_compiler must bind one programme ref and programme ID")
         return Policy(document)
     except (KeyError, TypeError, ValueError) as exc:
         raise PolicyError(GATE_CONFIG_INVALID, POLICY_FILE, f"policy is invalid: {exc}")
@@ -818,6 +832,7 @@ MACHINE_ROUTE_REPOSITORY_MISMATCH = "MACHINE_ROUTE_REPOSITORY_MISMATCH"
 MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE = "MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE"
 MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE = "MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE"
 MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED = "MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED"
+MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID = "MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID"
 
 
 def load_evidence(path: str | None, *, candidate_dir: str | None = None) -> tuple[dict | None, str | None]:
@@ -888,6 +903,16 @@ def programme_block(body: str) -> dict | None:
             return None  # absolute, traversing and empty-segment entries land here; a backslash
             # entry is accepted by the path rule and can never match a git path, so it is inert
     return block
+
+
+def programme_id_from_body(body: str) -> str | None:
+    """The stable operator-authored programme identity, or ``None`` unless the
+    Issue body carries exactly one canonical identity line. This identifies an
+    existing intent source; it is never a candidate grant or a path list."""
+    if not isinstance(body, str):
+        return None
+    identities = _PROGRAMME_ID_RE.findall(body)
+    return identities[0] if len(identities) == 1 else None
 
 
 def _within_envelope(path: str, envelope: list[str], *, exact_only: bool = False) -> bool:
@@ -977,6 +1002,20 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         return MACHINE_ROUTE_AUTHORITY_EXPIRED
     if not_after - now > MAX_PROGRAMME_TTL_SECONDS:
         return MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED
+    # M5 authority compilation is deliberately a policy-selected interpretation
+    # of an *existing* operator programme, not another authority document. It
+    # produces exactly this candidate's already-computed protected paths and
+    # stores no paths, signatures, callbacks, or candidate bytes in policy. The
+    # trusted workflow supplies the Issue body; the PR marker only selects it.
+    compiler = policy.authority_compiler
+    if compiler is not None and compiler["programme"] == ref:
+        if programme_id_from_body(body) != compiler["programme_id"]:
+            return MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID
+        for entry in entries:
+            for path in (entry.path, entry.rename_from):
+                if path is not None and not policy.in_allowlist(path):
+                    return MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE
+        return None
     roots = set(policy.roots)
     for entry in entries:
         for path in (entry.path, entry.rename_from):
