@@ -736,6 +736,50 @@ class DerivationPolicyTestCase(unittest.TestCase):
         self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
         self.assertIn(dp.MACHINE_ROUTE_EVIDENCE_ABSENT, findings[0][2])
 
+    def test_an_existing_operator_programme_compiles_exact_protected_paths_without_a_path_callback(self) -> None:
+        """M5: an admitted programme can authorize the exact protected candidate
+        set without making the candidate, a comment, or a second path store the grant."""
+        self.write_machine_policy(authority_compiler={
+            "schema": "aeos-programme-authority-compiler/v1",
+            "programme": self.PROGRAMME_REF,
+            "programme_id": "AT-TEST-M5",
+        })
+        head = self.protected_head()
+        body = "**Policy / Programme ID:** `AT-TEST-M5`\n" + self.programme_body(envelope=["docs/"])
+        self.assertEqual(self.route(head, self.evidence(body=body)), [])
+
+    def test_compiler_programme_identity_and_outer_policy_boundary_are_both_required(self) -> None:
+        self.write_machine_policy(authority_compiler={
+            "schema": "aeos-programme-authority-compiler/v1",
+            "programme": self.PROGRAMME_REF,
+            "programme_id": "AT-TEST-M5",
+        })
+        head = self.protected_head()
+        wrong_identity = "**Policy / Programme ID:** `AT-OTHER`\n" + self.programme_body(envelope=["docs/"])
+        findings = self.route(head, self.evidence(body=wrong_identity))
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn(dp.MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID, findings[0][2])
+
+        candidate_only = self.evidence(
+            pr_body=f"<!-- aeos-programme: {self.PROGRAMME_REF} -->\n**Policy / Programme ID:** `AT-TEST-M5`",
+            body=self.programme_body(envelope=["docs/"]),
+        )
+        findings = self.route(head, candidate_only)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn(dp.MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID, findings[0][2])
+
+        body = "**Policy / Programme ID:** `AT-TEST-M5`\n" + self.programme_body(envelope=["docs/"])
+        findings = self.route(head, self.evidence(body=body, editors=[self.MACHINE]))
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn(dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR, findings[0][2])
+
+        policy = self.policy()
+        reason = dp.machine_route(
+            policy, self.evidence(body=body), None, TARGET,
+            [dp.Entry("scripts/outside.py", "modified", "a" * 64, "b" * 64, None)], dp.time.time(),
+        )
+        self.assertEqual(reason, dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE)
+
     def test_the_machine_route_is_off_unless_the_policy_pins_both_principal_sets(self) -> None:
         # the signer-only policy (no machine_route) never admits an unsigned protected diff
         head = self.protected_head()
@@ -886,12 +930,33 @@ class DerivationPolicyTestCase(unittest.TestCase):
             with self.assertRaises(dp.PolicyError, msg=str(bad)):
                 dp.parse_policy(json.dumps(self.machine_policy(**bad)).encode())
 
+    def test_authority_compiler_configuration_is_closed_and_never_carries_a_path_grant(self) -> None:
+        valid = {
+            "schema": dp.AUTHORITY_COMPILER_SCHEMA,
+            "programme": self.PROGRAMME_REF,
+            "programme_id": "AT-TEST-M5",
+        }
+        for compiler in (
+            None,
+            {},
+            {**valid, "paths": ["scripts/agent_relay/"]},
+            {**valid, "programme_id": "lowercase"},
+            {**valid, "programme": "First-AI-Movers/agent-toolkit#0"},
+        ):
+            with self.assertRaises(dp.PolicyError, msg=str(compiler)):
+                dp.parse_policy(json.dumps(self.machine_policy(authority_compiler=compiler)).encode())
+
     def test_the_shipped_policy_pins_the_proven_principals(self) -> None:
         shipped = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         policy = dp.load_policy(shipped)
         self.assertTrue(policy.machine_route_enabled)
         self.assertEqual(policy.machine_principals, (("aeos-autonomous-main[bot]", "Bot"),))
         self.assertEqual(policy.operator_principals, frozenset({"hpcosta"}))
+        self.assertEqual(policy.authority_compiler, {
+            "schema": dp.AUTHORITY_COMPILER_SCHEMA,
+            "programme": "First-AI-Movers/agent-toolkit#3752",
+            "programme_id": "AEOS-AGENT-IDENTITY-SEPARATION-AND-ZERO-OPERATOR-CRYPTO-BABYSITTING-A",
+        })
 
     # -- composition into the gate -------------------------------------------------
     def test_gate_reports_the_typed_reason_and_keeps_every_other_floor(self) -> None:

@@ -145,6 +145,11 @@
     ],
     "operator_principals": [
       "hpcosta"
-    ]
+    ],
+    "authority_compiler": {
+      "schema": "aeos-programme-authority-compiler/v1",
+      "programme": "First-AI-Movers/agent-toolkit#3752",
+      "programme_id": "AEOS-AGENT-IDENTITY-SEPARATION-AND-ZERO-OPERATOR-CRYPTO-BABYSITTING-A"
+    }
   }
 }
