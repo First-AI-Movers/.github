@@ -738,18 +738,21 @@ def candidate_protected_set(
     """The set of paths a candidate must sign: the committed members, the closure
     regenerated at the merge base, and the closure regenerated at the head (so a
     helper the candidate adds and imports is protected in the same change).
-    Returns ``(protected, drift_finding)``; the drift finding is set when the
-    committed list differs from the base closure."""
+    Returns ``(protected, drift_finding)``. Growth is not drift: a member the base
+    closure gained after ``members`` was committed is already in the union, so
+    refusing it would add no protection and would strand every candidate until the
+    list is refreshed. The drift finding is set only when a committed member is no
+    longer in the base closure, which is also what refuses a candidate whose merge
+    base predates members the list has since committed."""
     _full, at_base = regenerate_closure(candidate_dir, base, policy)
     drift = None
-    if at_base != policy.members:
-        missing = sorted(at_base - policy.members)[:6]
-        extra = sorted(policy.members - at_base)[:6]
+    departed = policy.members - at_base
+    if departed:
         drift = (
             DERIVATION_POLICY_DRIFT,
             POLICY_FILE,
-            "committed member list differs from the closure regenerated at "
-            f"{base[:12]} (not committed: {missing}; no longer in closure: {extra})",
+            "committed member(s) no longer in the closure regenerated at "
+            f"{base[:12]}: {sorted(departed)[:6]}",
         )
     _full, at_head = regenerate_closure(candidate_dir, head, policy)
     return frozenset(policy.members | at_base | at_head), drift

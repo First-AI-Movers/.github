@@ -370,15 +370,38 @@ class DerivationPolicyTestCase(unittest.TestCase):
         self.assertEqual(self.evaluate(head, now=lambda: 1.0e9), [])
         self.assertEqual(self.codes(self.evaluate(head, now=lambda: 4.0e9)), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
 
-    def test_stale_member_list_is_drift(self) -> None:
+    def test_uncommitted_closure_growth_is_protected_not_drift(self) -> None:
+        """A member the closure gained after `members` was last committed is protected
+        by the regenerated closure, so it is signed like any member and strands no
+        candidate while the committed list catches up."""
         self.write_policy(not_after=FAR_FUTURE, members=EXPECTED_BOUNDED - {"scripts/agent_relay/validate.py"})
+        self.repo.write("scripts/agent_relay/validate.py", "def check():\n    return False\n")
+        head = self.repo.commit("modify the uncommitted member, unsigned")
+        self.assertEqual(self.codes(self.evaluate(head)), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.manifest_for(head)
+        head = self.repo.commit("sign")
+        self.assertEqual(self.evaluate(head), [])
+
+    def test_cutting_the_import_does_not_unprotect_an_uncommitted_member(self) -> None:
+        """The base closure keeps an uncommitted member protected even when the
+        candidate drops the import that put it there."""
+        self.write_policy(not_after=FAR_FUTURE, members=EXPECTED_BOUNDED - {"scripts/agent_relay/validate.py"})
+        self.repo.write(Repo.ROOT, "import agent_relay.models\nfrom commission_train import authority\n")
+        self.repo.write("scripts/agent_relay/validate.py", "def check():\n    return False\n")
+        head = self.repo.commit("cut the import and modify the member it protected")
+        protected, drift = dp.candidate_protected_set(self.repo.root, self.repo.base, head, self.policy())
+        self.assertIsNone(drift)
+        self.assertIn("scripts/agent_relay/validate.py", protected)
+
+    def test_member_that_left_the_closure_is_drift(self) -> None:
+        self.write_policy(not_after=FAR_FUTURE, members=EXPECTED_BOUNDED | {"scripts/agent_relay/retired.py"})
         self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
-        head = self.repo.commit("modify protected under a stale list")
+        head = self.repo.commit("modify protected under a list naming a departed member")
         self.manifest_for(head)
         head = self.repo.commit("sign")
         findings = self.evaluate(head)
-        self.assertIn(dp.DERIVATION_POLICY_DRIFT, self.codes(findings))
-        self.assertIn("scripts/agent_relay/validate.py", findings[0][2])
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DRIFT])
+        self.assertIn("scripts/agent_relay/retired.py", findings[0][2])
 
     def test_candidate_cannot_redefine_its_own_judge(self) -> None:
         """A candidate that ships its own policy file and pins its own key gets
