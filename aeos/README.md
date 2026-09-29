@@ -180,14 +180,16 @@ operator signature.
   lazy in-function import counts; package `__init__.py` modules count because they execute
   on import), intersected with `allowlist_prefixes` + `allowlist_files`. The gate
   regenerates that set from the **base** commit on every evaluation, with trusted code
-  parsing candidate Python as data, and refuses `DERIVATION_POLICY_DRIFT` when the
-  committed list differs. The list is never hand-edited, but it is **committed here and
-  refreshed by an ordinary PR**: after a signed protected change that alters the closure
-  merges in the target repository, every later candidate there that touches a protected
-  or allowlisted path is refused `DERIVATION_POLICY_DRIFT` until `members` is regenerated
-  (`derivation_policy.regenerate_closure(<clone>, <main sha>, policy)[1]`, sorted) and
-  committed in this repository; the lane that signs such a change owns that follow-up.
-  The gate regenerates the same
+  parsing candidate Python as data, and protects the union of `members` and that
+  regenerated set. **Growth is not drift**: a member the closure gained after `members`
+  was last committed is already protected by the regenerated set, so it is signed like
+  any other member and strands no candidate. The gate refuses `DERIVATION_POLICY_DRIFT`
+  only when a committed member is **no longer** in the base closure — which also refuses
+  a candidate whose merge base predates members the list has since committed. The list is
+  never hand-edited; it is **committed here and refreshed by an ordinary PR**
+  (`derivation_policy.regenerate_closure(<clone>, <main sha>, policy)[1]`, sorted) when a
+  member leaves the closure, and optionally to record growth — a stale list after growth
+  blocks nothing. The gate regenerates the same
   closure at the **candidate head** too, and the set the candidate must sign is the union:
   a helper added under the allowlist and imported from a root is protected in the same
   change, so the signature covers the whole effective validator change. A file under the
@@ -219,8 +221,8 @@ operator signature.
   wrong namespace, inactive or expired signer); `DERIVATION_POLICY_MANIFEST_INCOMPLETE`
   (manifest bytes are not the canonical protected diff — a missing deletion, rename or
   newly-imported-helper entry, a git-object-id representation or a wrong digest lands
-  here); `DERIVATION_POLICY_DRIFT` (committed member list differs from the regenerated
-  closure, or a declared root is absent at the base or the head); an unreadable or
+  here); `DERIVATION_POLICY_DRIFT` (a committed member is no longer in the regenerated
+  base closure, or a declared root is absent at the base or the head); an unreadable or
   self-inconsistent policy document is `GATE_CONFIG_INVALID`.
 - **Judge.** The policy document lives beside the gate in this repository, so a candidate
   that ships its own copy, or its own key, is judged by the trusted one. Changing the policy

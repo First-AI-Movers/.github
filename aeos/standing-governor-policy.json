@@ -15,7 +15,7 @@
     }
   ],
   "derivation_policy": {
-    "generation": "first-party import closure of `roots` under scripts/ (whole AST, lazy imports included, package __init__.py included), intersected with the allowlist; regenerated at the candidate's merge base on every evaluation and refused as DERIVATION_POLICY_DRIFT when it differs from `members`, and regenerated at the candidate head so that a newly added, newly imported allowlisted helper is protected in the same change. Manifest entries carry SHA-256 image digests and a protected-diff digest, never git object ids; `fingerprint` must be the SHA-256 fingerprint of `public_key`",
+    "generation": "first-party import closure of `roots` under scripts/ (whole AST, lazy imports included, package __init__.py included), intersected with the allowlist; regenerated at the candidate's merge base on every evaluation, protected as the union with `members`, and refused as DERIVATION_POLICY_DRIFT only when a committed member is no longer in it (growth is protected, not drift), and regenerated at the candidate head so that a newly added, newly imported allowlisted helper is protected in the same change. Manifest entries carry SHA-256 image digests and a protected-diff digest, never git object ids; `fingerprint` must be the SHA-256 fingerprint of `public_key`",
     "measured_at_revision": "d957babc1d10edb1a82053c7636789ef108f2a9f",
     "measured_full_closure_count": 395,
     "roots": [
