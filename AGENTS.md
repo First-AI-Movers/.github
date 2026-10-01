@@ -43,11 +43,24 @@ Open the PR **ready**, arm squash auto-merge **in the same step while the gate i
 still pending** (GitHub refuses to arm an already-mergeable PR), do not request
 review, do not wait. `aeos-merge-ready` is the one merge-blocking verdict.
 
-**One exception, and it is deliberate.** Deleting a control-plane path *in this
-repository* fails with `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` and needs a
-person. A deletion has no bytes, so no content floor can measure it, and this
-deletion reaches the gate that judges the whole organization. It is the only
-human gate left in the merge path.
+**Two exceptions, both deliberate, both in this repository only.** Each fails with
+`CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`:
+
+- **Who may change the judge.** A control-plane change here (`aeos/**`,
+  `.github/workflows/**`, `.github/actions/**`, `.github/aeos-gate.json`,
+  `.github/aeos-smoke.json`) is judged on its content only when the trusted
+  evidence names a pinned operator principal (type User) as the PR author *and*
+  as the run's actor. A machine principal, any bot, or an empty or unreadable
+  author or actor is refused, whatever the content — a machine never edits the
+  policy that judges machines.
+- **Deleting a control-plane path.** A deletion has no bytes, so no content floor
+  can measure it, and this deletion reaches the gate that judges the whole
+  organization. It is refused whoever authors it; an organization administrator
+  merges it under a ruleset bypass.
+
+These are the only human gates in the merge path. The same changes in a consumer
+repository are judged on content and merge. `aeos/README.md` is the contract for
+both.
 
 When an owned next effect is temporarily blocked on a routine dependency — a
 pending PR, a gate run, an AI review, or another owner — do exactly one of:
