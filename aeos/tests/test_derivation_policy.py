@@ -709,9 +709,12 @@ class DerivationPolicyTestCase(unittest.TestCase):
         stamp = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(days=days)
         return stamp.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-    def programme_body(self, *, state="ACTIVE", not_after=None, envelope=None,
+    _DATED = object()
+
+    def programme_body(self, *, state="ACTIVE", not_after=_DATED, envelope=None,
                        repository=TARGET, issue=3732) -> str:
-        not_after = not_after or self.days_ahead(7)
+        # `not_after=None` writes JSON null: standing intent, bounded by revocation, not a clock.
+        not_after = self.days_ahead(7) if not_after is self._DATED else not_after
         block = {"schema": "standing-authority/v2", "state": state, "repository": repository, "issue": issue,
                  "programme_id": "at-1951-standing", "serial": 3, "not_after": not_after,
                  "path_envelope": envelope or ["scripts/agent_relay/", "tests/agent_relay/"], "signature": ""}
@@ -843,8 +846,9 @@ class DerivationPolicyTestCase(unittest.TestCase):
                 body=self.programme_body(repository="First-AI-Movers/other")),
             dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE: self.evidence(body=self.programme_body(state="PAUSED")),
             dp.MACHINE_ROUTE_AUTHORITY_EXPIRED: self.evidence(body=self.programme_body(not_after="2000-01-01T00:00:00Z")),
-            dp.MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED: self.evidence(body=self.programme_body(not_after=self.days_ahead(15))),
-            dp.MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED + "-forever": self.evidence(body=self.programme_body(not_after="9999-12-31T23:59:59Z")),
+            dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE + "-revoked": self.evidence(body=self.programme_body(state="REVOKED", not_after=None)),
+            dp.MACHINE_ROUTE_PROGRAMME_NOT_OPEN + "-closed-standing": self.evidence(state="closed", body=self.programme_body(not_after=None)),
+            dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-not-after-number": self.evidence(body=self.programme_body(not_after=1)),
             dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-traversal-after-a-match": self.evidence(
                 body=self.programme_body(envelope=["scripts/agent_relay/", "../"])),
             dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-absolute-entry": self.evidence(
@@ -864,9 +868,34 @@ class DerivationPolicyTestCase(unittest.TestCase):
                 dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE, dp.MACHINE_ROUTE_AUTHORITY_EXPIRED,
                 dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE, dp.MACHINE_ROUTE_EVENT_UNPROVABLE,
                 dp.MACHINE_ROUTE_EVIDENCE_MALFORMED, dp.MACHINE_ROUTE_TRIGGER_NOT_MACHINE,
-                dp.MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED, dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE,
+                dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE,
                 dp.MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE,
                 dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR) if label.startswith(t))
+            findings = self.route(head, doc)
+            self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED], label)
+            self.assertIn(token, findings[0][2], label)
+
+    def test_standing_authority_is_bounded_by_revocation_not_by_a_calendar(self) -> None:
+        """agent-toolkit#3752 5925947456: unchanged operator intent never expires on a clock.
+
+        A null `not_after` (standing until revoked) and any operator-chosen future end are
+        admitted however far ahead; what stops the next protected effect is an actual
+        authority-changing event -- the Issue closed, `state` moved off ACTIVE, or an end the
+        operator chose having passed."""
+        self.write_machine_policy()
+        head = self.protected_head()
+        for label, not_after in (("standing", None), ("15-days", self.days_ahead(15)),
+                                 ("far-future", "9999-12-31T23:59:59Z")):
+            self.assertEqual(self.route(head, self.evidence(body=self.programme_body(not_after=not_after))), [], label)
+        for label, doc, token in (
+                ("closed", self.evidence(state="closed", body=self.programme_body(not_after=None)),
+                 dp.MACHINE_ROUTE_PROGRAMME_NOT_OPEN),
+                ("inactive", self.evidence(body=self.programme_body(state="INACTIVE", not_after=None)),
+                 dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE),
+                ("chosen-end-passed", self.evidence(body=self.programme_body(not_after="2000-01-01T00:00:00Z")),
+                 dp.MACHINE_ROUTE_AUTHORITY_EXPIRED),
+                ("scope-not-widened", self.evidence(body=self.programme_body(not_after=None, envelope=["docs/"])),
+                 dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE)):
             findings = self.route(head, doc)
             self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED], label)
             self.assertIn(token, findings[0][2], label)

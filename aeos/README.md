@@ -265,12 +265,17 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   the pinned machine principal and none is an operator principal; evidence repository equals the
   candidate repository; the programme Issue is open, authored by an operator principal (type
   User), and every recorded edit was by an operator principal (an unreadable history is not
-  "no edits"); its `standing-authority/v2` block names the same `owner/repo#N`, is `ACTIVE` and
-  unexpired; every protected changed path — both paths of a rename — is inside its
+  "no edits"); its `standing-authority/v2` block names the same `owner/repo#N`, is `ACTIVE`, and its
+  `not_after` is `null` or still ahead; every protected changed path — both paths of a rename — is inside its
   `path_envelope`. Absent or malformed evidence and events with no pull request are
   unprovable.
-- **Bounds a stolen or stale Issue cannot exceed.** `not_after` may lie at most 14 days ahead of
-  the gate's clock (`MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED`); a declared derivation **root** is
+- **Revocation, not a calendar, ends programme authority** (operator decision
+  agent-toolkit#3752 `5925947456`). `not_after: null` is standing intent: it holds until the
+  operator closes the Issue (`MACHINE_ROUTE_PROGRAMME_NOT_OPEN`), moves `state` off `ACTIVE`
+  (`MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE`) or supersedes the block. A non-null `not_after` is an
+  end the operator chose and is honoured (`MACHINE_ROUTE_AUTHORITY_EXPIRED`); elapsed time alone
+  revokes nothing, and there is no ceiling on how far ahead it may lie. Short-lived credentials
+  (signers, App tokens) keep their own expiry. Scope still cannot widen: a declared derivation **root** is
   admitted only by an exact-path envelope entry, never by a directory prefix
   (`MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE`), so `scripts/agent_relay/` can never quietly
   authorise rewriting the ceiling parser; a malformed envelope entry anywhere invalidates the
@@ -318,7 +323,7 @@ receipt may be evidence of admission or registration, never operator ratificatio
 Each source has exactly `role`, `ref`, `comment_id`, `issue_body_sha256`,
 `comment_body_sha256`, and `frontier_sha256`. Comment identities must be distinct;
 ratification belongs to the programme. Both authority objects must name that
-programme and be ACTIVE. Authority expiry cannot exceed the reviewed ceiling;
+programme and be ACTIVE. Authority expiry cannot exceed the reviewed ceiling (a `null` ceiling bounds nothing by time; a `null` authority under a dated ceiling would outlive it and is refused);
 its envelope is a subset of the ceiling's exact files, without directory grants.
 The generation is an operand version, not a runtime seat or generation store.
 Canonical JSON uses sorted keys, compact separators and UTF-8 without ASCII
