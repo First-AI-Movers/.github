@@ -229,8 +229,8 @@ def evaluate_control_plane_deletion(path: str, repository: str) -> list[tuple[st
     * In the **policy** repository it reaches the organization's gate itself.
       Deleting `aeos/merge_ready_gate.py`, or the workflow that runs it, disarms
       merge control for all eight repositories at once, and there is no candidate
-      content that could prove such a change safe. This is the residual human
-      gate, and it is deliberately the only one left.
+      content that could prove such a change safe. This is the residual deletion
+      gate; the other human condition here is identity (who may change the judge).
     """
     if (repository or "").strip().lower() != POLICY_REPOSITORY:
         return []

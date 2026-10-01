@@ -240,6 +240,7 @@ class CommentOperandTests(unittest.TestCase):
             'authority_shape': lambda o: o['authority'].update(extra=True),
             'programme': lambda o: o['authority'].update(issue=8),
             'expiry': lambda o: o['authority'].update(not_after='2026-09-23T00:00:00Z'),
+            'standing-under-dated-ceiling': lambda o: o['authority'].update(not_after=None),
             'scope': lambda o: o['authority'].update(path_envelope=['scripts/agent_relay/other.py']),
         }
         for name, change in cases.items():
@@ -250,6 +251,18 @@ class CommentOperandTests(unittest.TestCase):
                     {k: v for k, v in operand.items() if k != 'generation'})
                 with self.assertRaises(ValueError):
                     co.validate(operand, dp.programme_block)
+
+    def test_a_standing_ceiling_bounds_nothing_by_time(self):
+        """A null `not_after` is standing intent (revocation-bounded); under a null ceiling a
+        dated or standing authority is not a widening."""
+        for authority_end in (None, '2099-01-01T00:00:00Z'):
+            with self.subTest(authority_end=authority_end):
+                operand = copy.deepcopy(self.operand)
+                operand['ceiling']['not_after'] = None
+                operand['authority']['not_after'] = authority_end
+                operand['generation'] = self.ref + '@sha256:' + digest(
+                    {k: v for k, v in operand.items() if k != 'generation'})
+                co.validate(operand, dp.programme_block)
 
     def test_resolver_guards_without_downstream_masking(self):
         self.bind()

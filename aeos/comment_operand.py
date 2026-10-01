@@ -73,7 +73,11 @@ def validate(operand, parser):
             raise ValueError('comment operand programme')
     authority, ceiling = operand['authority'], operand['ceiling']
     parse_time = lambda s: datetime.datetime.fromisoformat(s.replace('Z', '+00:00'))
-    if parse_time(authority['not_after']) > parse_time(ceiling['not_after']):
+    # null = standing until revoked. A null ceiling bounds nothing by time; a null authority
+    # under a dated ceiling would outlive it, which is a widening.
+    if ceiling['not_after'] is not None and (
+            authority['not_after'] is None
+            or parse_time(authority['not_after']) > parse_time(ceiling['not_after'])):
         raise ValueError('comment operand expiry widened')
     # Exact files only on this new operand. No inferred directories or root expansion.
     if (any(p.endswith('/') for p in ceiling['path_envelope'] + authority['path_envelope'])

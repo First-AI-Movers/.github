@@ -89,10 +89,11 @@ MAX_EVIDENCE_BYTES = 512 * 1024
 MAX_PROGRAMME_EDITS = 100
 """The gate's own bound on the edit history it will judge (the workflow records at most this many;
 a longer history is unavailable, not "operator-only by assumption")."""
-MAX_PROGRAMME_TTL_SECONDS = 14 * 24 * 3600
-"""A programme block's `not_after` may lie at most this far ahead of the evaluation clock — the
-estate's ≤ 14-day ceiling bound (ADR §D15): an authority that a stolen or stale Issue body could
-carry forever is not a current authority."""
+# A programme block is REVOCATION-bounded, not calendar-bounded (operator decision
+# agent-toolkit#3752 5925947456): `not_after: null` is standing intent that holds until the
+# operator closes the Issue, moves `state` off ACTIVE, or supersedes the block; a non-null
+# `not_after` is an operator-chosen end and is honoured. Elapsed time alone revokes nothing.
+# Short-lived CREDENTIALS (signers above, App tokens) keep their own expiry.
 """The machine route (#3752 Slice A). The trusted workflow — never the candidate — writes one
 ``aeos-actor-evidence/v1`` file: the GitHub-authenticated pull-request author (login, type),
 the workflow actor, and the programme Issue the candidate's body names with
@@ -101,7 +102,7 @@ workflow's own token). The networkless gate then admits a protected diff WITHOUT
 SSH signature when, and only when, every one of these holds: the author is a pinned machine
 principal and not a pinned operator principal; the programme Issue is OPEN, authored by a
 pinned operator principal, and carries a ``standing-authority/v2`` block naming this
-repository and that Issue, ``state: ACTIVE`` and an unexpired ``not_after``; every protected
+repository and that Issue, ``state: ACTIVE`` and a ``not_after`` that is ``null`` (standing until revoked) or still ahead; every protected
 changed path lies inside that block's ``path_envelope``. Anything missing, stale or ambiguous
 fails closed to the SSH route, which stays as the break-glass/transition path. Credential
 reachability alone grants nothing: the App token can open the PR, but only the operator's
@@ -834,7 +835,6 @@ MACHINE_ROUTE_AUTHORITY_EXPIRED = "MACHINE_ROUTE_AUTHORITY_EXPIRED"
 MACHINE_ROUTE_REPOSITORY_MISMATCH = "MACHINE_ROUTE_REPOSITORY_MISMATCH"
 MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE = "MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE"
 MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE = "MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE"
-MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED = "MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED"
 MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID = "MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID"
 
 
@@ -893,7 +893,8 @@ def programme_block(body: str) -> dict | None:
         if key not in block:
             return None
     if (not isinstance(block["repository"], str) or type(block["issue"]) is not int
-            or not isinstance(block["state"], str) or not isinstance(block["not_after"], str)
+            or not isinstance(block["state"], str)
+            or not (block["not_after"] is None or isinstance(block["not_after"], str))
             or not isinstance(block["path_envelope"], list) or not block["path_envelope"]
             or any(not isinstance(p, str) or not p for p in block["path_envelope"])):
         return None
@@ -1001,10 +1002,8 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         not_after = _parse_not_after(block["not_after"], "programme")
     except ValueError:
         return MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID
-    if not_after is None or now >= not_after:
+    if not_after is not None and now >= not_after:
         return MACHINE_ROUTE_AUTHORITY_EXPIRED
-    if not_after - now > MAX_PROGRAMME_TTL_SECONDS:
-        return MACHINE_ROUTE_AUTHORITY_TTL_EXCEEDED
     # M5 authority compilation is deliberately a policy-selected interpretation
     # of an *existing* operator programme, not another authority document. It
     # produces exactly this candidate's already-computed protected paths and
