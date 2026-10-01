@@ -18,6 +18,7 @@ pull-request-body semantics, and no waiting.
 | Check | Reason code on failure |
 | --- | --- |
 | Changed control-plane paths satisfy the strict lane below | `WORKFLOW_POLICY_VIOLATION` · `CONTROL_PLANE_PROOF_FAILED` |
+| A control-plane change in this policy repository not authored and run by an identified operator | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | A control-plane **deletion** in this policy repository | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | No high-confidence credential shape in changed text | `SECRET_SHAPE_DETECTED` |
 | No high-confidence credential shape in any revision the range introduces | `SECRET_SHAPE_DETECTED` |
@@ -144,7 +145,12 @@ the judge is always the predecessor: these floors live in the trusted checkout
 resolved from the base commit, so a branch proposing a change to them is measured
 by the copy already on `main`.
 
-### The one residual human gate
+### The residual human gates
+
+Two conditions in **this** repository still need a person. The first is identity,
+not content: a control-plane change is judged only when an identified operator
+authors and runs it (see "Only a positively identified operator edits the judge"
+under the machine route below). The second is deletion.
 
 Deleting a control-plane path in **this** repository — the organization's own
 merge-control source — still fails with `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`.
@@ -443,8 +449,10 @@ gate too. An organization administrator merges it under a ruleset bypass. That
 is the intended escape hatch, not a deadlock — but it does mean the file is
 worth validating before it is merged.
 
-Pull requests against this repository that touch `.github/workflows/**` or
-`aeos/**` self-reject by design, including changes to the gate itself.
+In this repository, a pull request that touches `.github/workflows/**` or `aeos/**`,
+including a change to the gate itself, is judged on its content only when an
+identified operator authors and runs it. Any other author or actor is refused by
+design.
 
 ## Tests
 
