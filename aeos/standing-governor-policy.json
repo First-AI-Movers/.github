@@ -154,6 +154,22 @@
       "schema": "aeos-programme-authority-compiler/v1",
       "programme": "First-AI-Movers/agent-toolkit#3752",
       "programme_id": "AEOS-AGENT-IDENTITY-SEPARATION-AND-ZERO-OPERATOR-CRYPTO-BABYSITTING-A"
+    },
+    "scoped_grant": {
+      "schema": "aeos-scoped-grant-consumer/v1",
+      "programme": "First-AI-Movers/agent-toolkit#3752",
+      "directive_comment_id": 5871353356,
+      "directive_body_sha256": "0c1f14a31f2bdee813c915890b1d3208ee403f7f9ec4f92fb611b6f0ae146c80",
+      "max_ttl_seconds": 604800,
+      "excluded_paths": [
+        "scripts/agent_relay/dispatcher.py",
+        "scripts/agent_relay/machine_identity.py",
+        "scripts/agent_relay/pr_open.py",
+        "scripts/agent_relay/standing_ceiling.py",
+        "scripts/agent_relay/write_branch.py"
+      ],
+      "admission_label": "agent-relay:auto-execute",
+      "activation": "enabled"
     }
   }
 }

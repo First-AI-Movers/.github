@@ -69,6 +69,7 @@ import tempfile
 import time
 
 import comment_operand
+import scoped_grant
 
 DERIVATION_POLICY_DIFF_UNSIGNED = "DERIVATION_POLICY_DIFF_UNSIGNED"
 DERIVATION_POLICY_MANIFEST_INCOMPLETE = "DERIVATION_POLICY_MANIFEST_INCOMPLETE"
@@ -197,6 +198,7 @@ class Policy:
         "operator_principals",
         "comment_operand",
         "authority_compiler",
+        "scoped_grant",
     )
 
     def __init__(self, document: dict) -> None:
@@ -219,6 +221,8 @@ class Policy:
         self.operator_principals = frozenset(route.get("operator_principals", ()))
         self.comment_operand = route.get("comment_operand")
         self.authority_compiler = route.get("authority_compiler")
+        # #3052 Class B: the scoped-machine-grant consumer's binding (``scoped_grant.validate_binding``).
+        self.scoped_grant = route.get("scoped_grant")
 
     @property
     def machine_route_enabled(self) -> bool:
@@ -322,7 +326,8 @@ def parse_policy(raw: bytes) -> Policy:
         route = document.get("machine_route")
         if route is not None:
             if (not isinstance(route, dict)
-                    or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand", "authority_compiler"}):
+                    or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand",
+                                     "authority_compiler", "scoped_grant"}):
                 raise ValueError("machine_route has unknown keys")
             machines = route.get("machine_principals")
             operators = route.get("operator_principals")
@@ -355,6 +360,9 @@ def parse_policy(raw: bytes) -> Policy:
                         or not isinstance(compiler.get("programme_id"), str)
                         or not re.fullmatch(r"[A-Z][A-Z0-9-]{2,127}", compiler["programme_id"])):
                     raise ValueError("authority_compiler must bind one programme ref and programme ID")
+            if "scoped_grant" in route:
+                # #3052 Class B: a grant only narrows the compiler programme, so it binds nothing without one.
+                scoped_grant.validate_binding(route["scoped_grant"], compiler=route.get("authority_compiler"))
         return Policy(document)
     except (KeyError, TypeError, ValueError) as exc:
         raise PolicyError(GATE_CONFIG_INVALID, POLICY_FILE, f"policy is invalid: {exc}")
@@ -568,16 +576,22 @@ class Entry:
     fields are SHA-256 hex digests of the file bytes (never git object ids) or
     ``absent``."""
 
-    __slots__ = ("path", "status", "pre_sha256", "post_sha256", "rename_from")
+    __slots__ = ("path", "status", "pre_sha256", "post_sha256", "rename_from", "pre_mode", "post_mode")
 
     def __init__(
-        self, path: str, status: str, pre_sha256: str, post_sha256: str, rename_from: str | None
+        self, path: str, status: str, pre_sha256: str, post_sha256: str, rename_from: str | None,
+        pre_mode: str | None = None, post_mode: str | None = None,
     ) -> None:
         self.path = path
         self.status = status
         self.pre_sha256 = pre_sha256
         self.post_sha256 = post_sha256
         self.rename_from = rename_from
+        # The git modes of the two sides (``100644``, ``120000``, ``000000`` ...), carried for the scoped-grant
+        # judge (agent-toolkit #3052 Class B) and deliberately NOT part of ``as_dict``: the signed manifest
+        # bytes are unchanged.
+        self.pre_mode = pre_mode
+        self.post_mode = post_mode
 
     def as_dict(self) -> dict:
         record = {
@@ -595,14 +609,17 @@ class _Change:
     """One raw ``git diff`` record: status letter, old and new path, and the
     pre/post git object ids (used only to read the bytes that are then hashed)."""
 
-    __slots__ = ("code", "old", "new", "pre_blob", "post_blob")
+    __slots__ = ("code", "old", "new", "pre_blob", "post_blob", "src_mode", "dst_mode")
 
-    def __init__(self, code: str, old: str, new: str, pre_blob: str, post_blob: str) -> None:
+    def __init__(self, code: str, old: str, new: str, pre_blob: str, post_blob: str,
+                 src_mode: str | None = None, dst_mode: str | None = None) -> None:
         self.code = code
         self.old = old
         self.new = new
         self.pre_blob = pre_blob
         self.post_blob = post_blob
+        self.src_mode = src_mode
+        self.dst_mode = dst_mode
 
 
 def raw_diff(candidate_dir: str, base: str, head: str) -> list[_Change]:
@@ -645,7 +662,7 @@ def raw_diff(candidate_dir: str, base: str, head: str) -> list[_Change]:
             raise PolicyError(EVIDENCE_UNREADABLE, new, f"git diff emitted an unknown status {status!r}")
         pre = src_sha if src_sha.strip("0") else ABSENT
         post = dst_sha if dst_sha.strip("0") else ABSENT
-        changes.append(_Change(code, old, new, pre, post))
+        changes.append(_Change(code, old, new, pre, post, src_mode, dst_mode))
     return changes
 
 
@@ -663,16 +680,16 @@ def _select(changes: list[_Change], protects) -> list[tuple[_Change, Entry]]:
     for c in changes:
         if c.code == "A" or c.code == "C":
             if protects(c.new):
-                selected.append((c, Entry(c.new, "added", ABSENT, "", None)))
+                selected.append((c, Entry(c.new, "added", ABSENT, "", None, c.src_mode, c.dst_mode)))
         elif c.code == "D":
             if protects(c.old):
-                selected.append((c, Entry(c.old, "deleted", "", ABSENT, None)))
+                selected.append((c, Entry(c.old, "deleted", "", ABSENT, None, c.src_mode, c.dst_mode)))
         elif c.code == "M" or c.code == "T":
             if protects(c.new):
-                selected.append((c, Entry(c.new, "modified", "", "", None)))
+                selected.append((c, Entry(c.new, "modified", "", "", None, c.src_mode, c.dst_mode)))
         elif c.code == "R":
             if protects(c.old) or protects(c.new):
-                selected.append((c, Entry(c.new, "renamed", "", "", c.old)))
+                selected.append((c, Entry(c.new, "renamed", "", "", c.old, c.src_mode, c.dst_mode)))
     return selected
 
 
@@ -963,6 +980,18 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         return MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE
     if (evidence.get("repository") or "").strip().lower() != repository.strip().lower():
         return MACHINE_ROUTE_REPOSITORY_MISMATCH
+    # #3052 Class B: grant-marker presence is decided BEFORE any programme-specific routing. A pull request
+    # that names a scoped machine grant is judged only by the scoped-grant judge, under the one compiler
+    # programme its binding names; with no binding, or a disabled one, it refuses whatever programme it
+    # selects. A pull request without a marker takes exactly the route below, unchanged.
+    grant_state = scoped_grant.marker_state(pr.get("body", ""))
+    if grant_state != scoped_grant.MARKER_ABSENT:
+        if policy.scoped_grant is None:
+            return scoped_grant.SCOPED_GRANT_UNBOUND
+        if policy.scoped_grant.get("activation") != "enabled":
+            return scoped_grant.SCOPED_GRANT_DISABLED
+        if programme_ref_from_body(pr.get("body", "")) != policy.scoped_grant["programme"]:
+            return scoped_grant.SCOPED_GRANT_PROGRAMME_MISMATCH
     ref = programme_ref_from_body(pr.get("body", ""))
     if ref is None:
         return MACHINE_ROUTE_PROGRAMME_ABSENT
@@ -1013,6 +1042,10 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
     if compiler is not None and compiler["programme"] == ref:
         if programme_id_from_body(body) != compiler["programme_id"]:
             return MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID
+        # #3052 Class B: a grant-marked pull request (already bound to this programme above) is judged ONLY
+        # against that grant's exact files. It never falls back to the compiler's whole allowlist.
+        if grant_state != scoped_grant.MARKER_ABSENT:
+            return scoped_grant.judge(policy.scoped_grant, policy, evidence, repository, entries, now)
         for entry in entries:
             for path in (entry.path, entry.rename_from):
                 if path is not None and not policy.in_allowlist(path):

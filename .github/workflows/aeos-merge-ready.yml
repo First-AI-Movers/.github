@@ -135,6 +135,12 @@ jobs:
                           if operand is not None and operand['programme'] == refs[0]:
                               import comment_operand
                               doc['comment_sources'] = comment_operand.collect(operand, api, time.time())
+                          # #3052 Class B: the scoped machine grant this PR names (if any), read with the job's
+                          # own read-only token. The gate judges it networklessly; no binding, no collection.
+                          grant = getattr(trusted, 'scoped_grant', None)
+                          if grant is not None and grant['programme'] == refs[0]:
+                              import scoped_grant
+                              doc['scoped_grant'] = scoped_grant.collect(grant, body, api, time.time())
                       else:
                           doc["programme"] = {"ref": refs[0], "unavailable": "programme issue could not be read"}
           except Exception as error:  # noqa: BLE001 - the gate fails closed on this file
