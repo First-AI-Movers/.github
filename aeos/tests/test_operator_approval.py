@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -55,11 +56,12 @@ _ONE_APPROVAL = object()
 
 
 def evidence(reviews=_ONE_APPROVAL, *, author=MACHINE, author_type="Bot", actor=MACHINE, head_commit=MACHINE,
-             head=HEAD, repository=REPO, event="pull_request", body="") -> dict:
+             head=HEAD, repository=REPO, event="pull_request", body="", context=oa.CONTEXT_CURRENT) -> dict:
     return {"schema": dp.EVIDENCE_SCHEMA, "event": event, "repository": repository, "actor": actor,
             "pull_request": {"number": 7, "author_login": author, "author_type": author_type, "head_sha": head,
                              "head_commit_author_login": head_commit, "body": body,
-                             "reviews": [review(1)] if reviews is _ONE_APPROVAL else reviews}}
+                             "approval": {"context": context,
+                                          "reviews": [review(1)] if reviews is _ONE_APPROVAL else reviews}}}
 
 
 class RefusalTests(unittest.TestCase):
@@ -111,6 +113,21 @@ class RefusalTests(unittest.TestCase):
         for rows in bad_rows:
             with self.subTest(rows=str(rows)[:60]):
                 self.assertEqual(self.judge(evidence(rows)), oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE)
+        for broken in (None, "x", {}, {"context": "CURRENT"}, {"context": "LATER", "reviews": [review(1)]}):
+            ev = evidence()
+            ev["pull_request"]["approval"] = broken
+            with self.subTest(approval=broken):
+                self.assertEqual(self.judge(ev), oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE)
+        ev = evidence()
+        ev["pull_request"].pop("approval")
+        self.assertEqual(self.judge(ev), oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE)
+        self.assertEqual(self.judge(evidence(context=oa.CONTEXT_UNREAD)), oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE)
+
+    def test_a_pull_request_that_changed_since_its_event_is_never_judged_as_it_was(self):
+        """A re-run replays its original event: an edited body or a moved head refuses, typed."""
+        for context in (oa.CONTEXT_HEAD_MOVED, oa.CONTEXT_BODY_CHANGED):
+            with self.subTest(context=context):
+                self.assertEqual(self.judge(evidence(context=context)), oa.OPERATOR_APPROVAL_CONTEXT_CHANGED)
 
     def test_only_a_pinned_human_operators_decisive_review_counts(self):
         for rows in ([], [review(1, login="contributor")], [review(1, kind="Bot")],
@@ -178,25 +195,51 @@ class BindingAndCollectionTests(unittest.TestCase):
             return {"id": i, "user": {"login": OPERATOR, "type": "User"}, "state": "COMMENTED",
                     "commit_id": HEAD, "submitted_at": "2026-10-03T12:00:00Z", "body": "ignored"}
         pages = {1: [row(i) for i in range(1, 101)], 2: [row(i) for i in range(101, 131)]}
+        current = {"head": {"sha": HEAD}, "body": "B"}
         calls = []
 
         def api(path):
             calls.append(path)
+            if path == f"repos/{REPO}/pulls/7":
+                return current
             return pages.get(int(path.rsplit("page=", 1)[1]), [])
-        got = oa.collect(api, REPO, 7)
-        self.assertEqual(len(got), 130)
-        self.assertEqual(set(got[0]), {"id", "login", "type", "state", "commit_id", "submitted_at"})
-        self.assertEqual(calls, [f"repos/{REPO}/pulls/7/reviews?per_page=100&page={n}" for n in (1, 2)])
+        got = oa.collect(api, REPO, 7, HEAD, "B")
+        self.assertEqual(got["context"], oa.CONTEXT_CURRENT)
+        self.assertEqual(len(got["reviews"]), 130)
+        self.assertEqual(set(got["reviews"][0]), {"id", "login", "type", "state", "commit_id", "submitted_at"})
+        self.assertEqual(calls, [f"repos/{REPO}/pulls/7"] + [
+            f"repos/{REPO}/pulls/7/reviews?per_page=100&page={n}" for n in (1, 2)])
         # a page that ends exactly full asks once more; an empty next page ends the read
         pages = {1: [row(i) for i in range(1, 101)]}
-        self.assertEqual(len(oa.collect(api, REPO, 7)), 100)
+        self.assertEqual(len(oa.collect(api, REPO, 7, HEAD, "B")["reviews"]), 100)
         # more than the bound is unreadable, never truncated into "no decisive review"
         pages = {n: [row(n * 1000 + i) for i in range(100)] for n in range(1, oa.MAX_REVIEW_PAGES + 2)}
-        self.assertIsNone(oa.collect(api, REPO, 7))
-        for broken in (lambda path: None, lambda path: {"message": "rate limited"}, lambda path: [None]):
-            self.assertIsNone(oa.collect(broken, REPO, 7))
+        self.assertEqual(oa.collect(api, REPO, 7, HEAD, "B"), {"context": oa.CONTEXT_CURRENT, "reviews": None})
+        pages = {1: [row(1)]}
+        for rows in (None, {"message": "rate limited"}, [None]):
+            pages = {1: rows}
+            self.assertEqual(oa.collect(api, REPO, 7, HEAD, "B"), {"context": oa.CONTEXT_CURRENT, "reviews": None})
+
+    def test_collection_binds_the_pull_request_as_it_is_now(self):
+        def api_for(current):
+            return lambda path: current if path.endswith("/pulls/7") else []
+        cases = (({"head": {"sha": OLDER}, "body": "B"}, oa.CONTEXT_HEAD_MOVED),
+                 ({"head": {"sha": HEAD}, "body": "B + a grant marker"}, oa.CONTEXT_BODY_CHANGED),
+                 (None, oa.CONTEXT_UNREAD), ({"body": "B"}, oa.CONTEXT_UNREAD),
+                 ({"head": {"sha": HEAD}, "body": None}, oa.CONTEXT_BODY_CHANGED))
+        for current, context in cases:
+            with self.subTest(context=context, current=current):
+                self.assertEqual(oa.collect(api_for(current), REPO, 7, HEAD, "B"), {"context": context, "reviews": None})
+        # an empty body and a null one are the same body (GitHub returns null for an empty description)
+        self.assertEqual(oa.collect(api_for({"head": {"sha": HEAD}, "body": None}), REPO, 7, HEAD, ""),
+                         {"context": oa.CONTEXT_CURRENT, "reviews": []})
         for number in (None, 0, -1, True, "7"):
-            self.assertIsNone(oa.collect(api, REPO, number))
+            self.assertEqual(oa.collect(api_for({}), REPO, number, HEAD, "B"), {"context": oa.CONTEXT_UNREAD, "reviews": None})
+
+    def test_only_enabled_switches_collection_on(self):
+        self.assertTrue(oa.enabled({"schema": oa.SCHEMA, "activation": "enabled"}))
+        for binding in (None, {}, {"schema": oa.SCHEMA, "activation": "disabled"}, "enabled"):
+            self.assertFalse(oa.enabled(binding))
 
 
 class MachineRouteTests(unittest.TestCase):
@@ -234,8 +277,9 @@ class MachineRouteTests(unittest.TestCase):
         self.assertEqual(self.route(evidence(head_commit="someone")), dp.MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE)
 
     def test_a_grant_marked_pull_request_is_never_admitted_by_an_approval(self):
-        for marker in ("<!-- scoped-machine-grant: First-AI-Movers/agent-toolkit#9 " + "c" * 64 + " -->",
-                       "<!-- scoped-machine-grant: malformed -->"):
+        valid = "<!-- scoped-machine-grant: First-AI-Movers/agent-toolkit#9@sha256:" + "c" * 64 + " -->"
+        self.assertIsInstance(scoped_grant.marker_state(valid), tuple)   # the marker grammar the publisher composes
+        for marker in (valid, "<!-- scoped-machine-grant: malformed -->"):
             body = "<!-- aeos-programme: First-AI-Movers/agent-toolkit#3752 -->\n" + marker
             with self.subTest(marker=marker[:40]):
                 self.assertNotEqual(scoped_grant.marker_state(body), scoped_grant.MARKER_ABSENT)
@@ -367,16 +411,21 @@ class WorkflowTests(unittest.TestCase):
         script = workflow.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
         return textwrap.dedent(script)
 
-    def run_script(self, trusted, reviews, body=""):
+    def run_script(self, trusted, reviews, body="", current=None, raises=None):
+        """Execute the workflow's evidence script with ``gh api`` answered in memory."""
         calls = []
 
         def run(argv, **kwargs):
             path = argv[2]
             calls.append(path)
+            if raises is not None and raises(path):
+                raise subprocess.TimeoutExpired(argv, 30)
             if "/commits/" in path:
                 result = {"author": {"login": MACHINE}}
             elif "/reviews" in path:
                 result = reviews
+            elif path == f"repos/{REPO}/pulls/7":
+                result = current if current is not None else {"head": {"sha": HEAD}, "body": body}
             elif path.startswith("repos/") and "/issues/" in path:
                 result = {"state": "open", "body": "Programme", "user": {"login": OPERATOR, "type": "User"}}
             elif path == "graphql":
@@ -399,23 +448,53 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(load.call_count, 1)
             return json.loads(output.read_text()), calls
 
-    def test_reviews_are_collected_only_when_the_route_is_bound(self):
-        row = {"id": 1, "user": {"login": OPERATOR, "type": "User"}, "state": "APPROVED",
-               "commit_id": HEAD, "submitted_at": "2026-10-03T12:00:00Z"}
-        bound = dp.parse_policy(POLICY_FILE.read_bytes())
-        doc, calls = self.run_script(lambda _d: bound, [row])
-        self.assertEqual(doc["pull_request"]["reviews"], [review(1)])
+    ROW = {"id": 1, "user": {"login": OPERATOR, "type": "User"}, "state": "APPROVED",
+           "commit_id": HEAD, "submitted_at": "2026-10-03T12:00:00Z"}
+
+    @staticmethod
+    def bound(activation="enabled"):
+        document = json.loads(POLICY_FILE.read_text())
+        document["machine_route"]["operator_approval"]["activation"] = activation
+        return dp.parse_policy(json.dumps(document).encode())
+
+    def test_reviews_are_collected_only_when_the_route_is_switched_on(self):
+        bound = self.bound()
+        doc, calls = self.run_script(lambda _d: bound, [self.ROW])
+        self.assertEqual(doc["pull_request"]["approval"], {"context": oa.CONTEXT_CURRENT, "reviews": [review(1)]})
         self.assertNotIn("unavailable", doc)
         self.assertIsNone(oa.refusal(bound, doc, REPO, HEAD))
-        doc, calls = self.run_script(lambda _d: SimpleNamespace(), [row])
-        self.assertNotIn("reviews", doc["pull_request"])
-        self.assertFalse([c for c in calls if "/reviews" in c])
+        for trusted in (SimpleNamespace(), self.bound("disabled")):
+            with self.subTest(trusted=type(trusted).__name__):
+                doc, calls = self.run_script(lambda _d, t=trusted: t, [self.ROW])
+                self.assertNotIn("approval", doc["pull_request"])
+                self.assertFalse([c for c in calls if "/reviews" in c or c.endswith("/pulls/7")])
+
+    def test_a_body_edited_since_the_event_is_not_judged_by_approval(self):
+        """Review P1: a re-run replays the original body; the fresh pull request decides."""
+        bound = self.bound()
+        marker = "<!-- scoped-machine-grant: First-AI-Movers/agent-toolkit#9@sha256:" + "c" * 64 + " -->"
+        doc, _calls = self.run_script(lambda _d: bound, [self.ROW], current={"head": {"sha": HEAD}, "body": marker})
+        self.assertEqual(doc["pull_request"]["approval"], {"context": oa.CONTEXT_BODY_CHANGED, "reviews": None})
+        self.assertEqual(oa.refusal(bound, doc, REPO, HEAD), oa.OPERATOR_APPROVAL_CONTEXT_CHANGED)
+        doc, _calls = self.run_script(lambda _d: bound, [self.ROW], current={"head": {"sha": OLDER}, "body": ""})
+        self.assertEqual(oa.refusal(bound, doc, REPO, HEAD), oa.OPERATOR_APPROVAL_CONTEXT_CHANGED)
+
+    def test_a_failed_review_read_never_costs_the_other_evidence(self):
+        """Review P2: a timeout on the review read records UNREAD; the programme is still collected."""
+        bound = self.bound()
+        programme = "<!-- aeos-programme: " + REPO + "#6246 -->"
+        doc, _calls = self.run_script(lambda _d: bound, [self.ROW], body=programme,
+                                      raises=lambda path: "/reviews" in path)
+        self.assertEqual(doc["pull_request"]["approval"], {"context": "UNREAD", "reviews": None})
+        self.assertNotIn("unavailable", doc)
+        self.assertEqual(doc["programme"]["ref"], REPO + "#6246")
+        self.assertEqual(oa.refusal(bound, doc, REPO, HEAD), oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE)
 
     def test_an_unreadable_policy_binds_nothing_and_breaks_nothing_else(self):
         def broken(_d):
             raise dp.PolicyError(dp.GATE_CONFIG_INVALID, dp.POLICY_FILE, "bad")
         doc, _calls = self.run_script(broken, [])
-        self.assertNotIn("reviews", doc["pull_request"])
+        self.assertNotIn("approval", doc["pull_request"])
         self.assertNotIn("unavailable", doc)   # no programme marker: the programme path never ran
 
     def test_an_unreadable_policy_still_fails_the_programme_read_closed(self):
@@ -423,30 +502,78 @@ class WorkflowTests(unittest.TestCase):
             raise dp.PolicyError(dp.GATE_CONFIG_INVALID, dp.POLICY_FILE, "bad")
         doc, _calls = self.run_script(broken, [], body="<!-- aeos-programme: " + REPO + "#6246 -->")
         self.assertEqual(doc.get("unavailable"), "PolicyError")
-        bound = dp.parse_policy(POLICY_FILE.read_bytes())
+        bound = self.bound()
         doc, _calls = self.run_script(lambda _d: bound, [], body="<!-- aeos-programme: " + REPO + "#6246 -->")
         self.assertNotIn("unavailable", doc)
         self.assertEqual(doc["programme"]["ref"], REPO + "#6246")
 
     def test_an_incomplete_review_read_is_recorded_as_unreadable(self):
-        bound = dp.parse_policy(POLICY_FILE.read_bytes())
+        bound = self.bound()
         doc, _calls = self.run_script(lambda _d: bound, None)
-        self.assertIsNone(doc["pull_request"]["reviews"])
+        self.assertEqual(doc["pull_request"]["approval"], {"context": oa.CONTEXT_CURRENT, "reviews": None})
         self.assertEqual(oa.refusal(bound, doc, REPO, HEAD), oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE)
 
-    def test_the_rerun_workflow_meets_the_workflow_floor_and_publishes_no_verdict(self):
+    def rerun_document(self):
         import yaml
+        return yaml.safe_load((WORKFLOWS / "aeos-approval-rerun.yml").read_text())
+
+    def test_the_rerun_workflow_meets_the_workflow_floor_and_publishes_no_verdict(self):
         path = ".github/workflows/aeos-approval-rerun.yml"
-        document = yaml.safe_load((WORKFLOWS / "aeos-approval-rerun.yml").read_text())
+        document = self.rerun_document()
         for repository in ("First-AI-Movers/.github", REPO):
             self.assertEqual(workflow_policy.evaluate_workflow(path, document, repository), [], repository)
-        triggers = document.get("on", document.get(True))
-        self.assertEqual(set(triggers), {"pull_request_review"})
         self.assertEqual(document["permissions"], {})
-        [job] = document["jobs"].values()
-        self.assertEqual(job["permissions"], {"actions": "write"})
-        self.assertNotIn("aeos-merge-ready", document["jobs"])
+        [(name, job)] = document["jobs"].items()
+        self.assertNotEqual(name, "aeos-merge-ready")
         self.assertNotEqual(job.get("name"), "aeos-merge-ready")
+        self.assertEqual(job["permissions"], {"actions": "write"})
+
+    def test_every_change_of_decision_re_judges_and_nothing_else_does(self):
+        """Review P1: a change request or a dismissal must re-run a green verdict, not only an approval."""
+        document = self.rerun_document()
+        triggers = document.get("on", document.get(True))
+        self.assertEqual(triggers, {"pull_request_review": {"types": ["submitted", "dismissed"]}})
+        self.assertEqual(document["concurrency"]["cancel-in-progress"], False)
+        condition = " ".join(document["jobs"]["rerun"]["if"].split())
+        self.assertEqual(condition, "github.event.action == 'dismissed' || github.event.review.state == 'approved' "
+                                    "|| github.event.review.state == 'changes_requested'")
+
+    def run_rerun(self, answers):
+        """Run the job's script with a fake ``gh`` answering the run listing from ``answers`` in order."""
+        script = self.rerun_document()["jobs"]["rerun"]["steps"][0]["run"]
+        with tempfile.TemporaryDirectory() as temp:
+            bin_dir = Path(temp, "bin")
+            bin_dir.mkdir()
+            queue, posts = Path(temp, "queue"), Path(temp, "posts")
+            queue.write_text("".join(a + "\n" for a in answers))
+            posts.write_text("")
+            (bin_dir / "gh").write_text(textwrap.dedent(f"""\
+                #!/bin/bash
+                if [ "$3" = "POST" ]; then echo "$4" >> {posts}; exit 0; fi
+                answer="$(head -n 1 {queue})"; tail -n +2 {queue} > {queue}.next; mv {queue}.next {queue}
+                case "$answer" in FAIL|"") exit 1 ;; EMPTY) exit 0 ;; *) echo "$answer" ;; esac
+                """))
+            (bin_dir / "sleep").write_text("#!/bin/bash\nexit 0\n")
+            for tool in ("gh", "sleep"):
+                (bin_dir / tool).chmod(0o755)
+            env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "REPO": REPO, "HEAD_SHA": HEAD, "GH_TOKEN": "x"}
+            proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
+            return proc.returncode, posts.read_text().split()
+
+    def test_the_rerun_waits_for_the_gate_then_re_runs_whatever_it_concluded(self):
+        runs = f"repos/{REPO}/actions/runs/"
+        cases = {
+            "completed now": (["11 completed"], 0, [runs + "11/rerun"]),
+            "in flight, then completed": (["12 in_progress", "12 queued", "12 completed"], 0, [runs + "12/rerun"]),
+            "a failed read is retried": (["FAIL", "FAIL", "13 completed"], 0, [runs + "13/rerun"]),
+            "one empty read is not believed": (["EMPTY", "14 completed"], 0, [runs + "14/rerun"]),
+            "two empty reads: no run at this head": (["EMPTY", "EMPTY"], 0, []),
+            "never completes: a visible failure": (["15 in_progress"] * 40, 1, []),
+            "never readable: a visible failure": (["FAIL"] * 40, 1, []),
+        }
+        for name, (answers, code, posted) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(self.run_rerun(answers), (code, posted))
 
 
 if __name__ == "__main__":

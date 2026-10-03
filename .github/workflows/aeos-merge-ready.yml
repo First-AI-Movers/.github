@@ -117,11 +117,16 @@ jobs:
                       trusted = derivation_policy.load_policy('policy/aeos')
                   except Exception as error:  # noqa: BLE001 - re-raised where the programme needs it
                       trusted, trusted_error = None, error
-                  # #3052 paperwork removal: the reviews, only when the trusted policy binds the operator-approval
-                  # route. A read that is not complete records None, which the judge refuses; never "no review".
-                  if getattr(trusted, 'operator_approval', None) is not None:
+                  # #3052 paperwork removal: the reviews, only when the trusted policy switches the operator-approval
+                  # route on. Any failure here records UNREAD, which the judge refuses, and leaves every other
+                  # piece of evidence below to be collected exactly as before.
+                  try:
                       import operator_approval
-                      doc["pull_request"]["reviews"] = operator_approval.collect(api, repo, pr.get("number"))
+                      if operator_approval.enabled(getattr(trusted, 'operator_approval', None)):
+                          doc["pull_request"]["approval"] = operator_approval.collect(
+                              api, repo, pr.get("number"), head_sha, body)
+                  except Exception:  # noqa: BLE001 - recorded, never raised past the other evidence
+                      doc["pull_request"]["approval"] = {"context": "UNREAD", "reviews": None}
                   refs = re.findall(r"<!--\s*aeos-programme:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)\s*-->", body)
                   if len(refs) == 1:
                       prepo, number = refs[0].split("#")

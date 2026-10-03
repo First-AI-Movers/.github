@@ -308,8 +308,13 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   - PR author, run actor and head-commit author are the pinned machine principal;
   - the evidence repository is the candidate's;
   - the evidence head is the evaluated head;
+  - the pull request, read fresh by the trusted workflow, still has that head and the very body
+    the rest of the gate judges (`OPERATOR_APPROVAL_CONTEXT_CHANGED` otherwise). A re-run replays
+    its original event, so a body edited since then, say to add a grant marker, is never judged
+    as the old one;
   - the review list was read completely (at most three pages of 100; more is unreadable, never
-    "no review");
+    "no review"). The workflow reads reviews only while `activation` is `enabled`, and a failed
+    read records `UNREAD` without costing any other evidence;
   - the latest decisive review (`APPROVED`, `CHANGES_REQUESTED` or `DISMISSED`, ordered by
     `submitted_at`, then id) by a pinned operator principal of type User is `APPROVED`, on that
     head. A later push makes it stale, and a change request or dismissal revokes it. `COMMENTED`
@@ -317,8 +322,10 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
 
   The identity standard is the predecessor's: the same pinned logins. What is bound is one commit,
   narrower than any envelope. The machine never approves, and GitHub never lets a pull request's
-  author approve it. `.github/workflows/aeos-approval-rerun.yml` re-runs the completed, non-green
-  `aeos-merge-ready` run at that head when an approving review lands on it. A re-run keeps the
+  author approve it. `.github/workflows/aeos-approval-rerun.yml` re-runs the latest
+  `aeos-merge-ready` run at the head whenever the decision changes: an approval, a change request
+  or a dismissal, whatever that run concluded. So a revocation turns an approval-based green back
+  into a refusal. It waits, within a bound, for a run still in flight. A re-run keeps the
   machine as the run's actor, and the gate re-reads every fact itself. Residual, as above: a
   process acting under the operator's own credential could submit an approval, exactly as it
   could author a pull request today; identity separation (#3752 M4) removes both. Rollback:

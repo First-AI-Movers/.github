@@ -31,6 +31,7 @@ OPERATOR_APPROVAL_HEAD_COMMIT_NOT_MACHINE = "OPERATOR_APPROVAL_HEAD_COMMIT_NOT_M
 OPERATOR_APPROVAL_REPOSITORY_MISMATCH = "OPERATOR_APPROVAL_REPOSITORY_MISMATCH"
 OPERATOR_APPROVAL_HEAD_MISMATCH = "OPERATOR_APPROVAL_HEAD_MISMATCH"
 OPERATOR_APPROVAL_REVIEWS_UNREADABLE = "OPERATOR_APPROVAL_REVIEWS_UNREADABLE"
+OPERATOR_APPROVAL_CONTEXT_CHANGED = "OPERATOR_APPROVAL_CONTEXT_CHANGED"
 OPERATOR_APPROVAL_ABSENT = "OPERATOR_APPROVAL_ABSENT"
 OPERATOR_APPROVAL_NOT_APPROVED = "OPERATOR_APPROVAL_NOT_APPROVED"
 OPERATOR_APPROVAL_STALE_HEAD = "OPERATOR_APPROVAL_STALE_HEAD"
@@ -46,6 +47,21 @@ _SHA = re.compile(r"[0-9a-f]{40}")
 _STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _REVIEW_KEYS = frozenset({"id", "login", "type", "state", "commit_id", "submitted_at"})
 
+#: What the collector found about the pull request when it read the reviews. Only ``CURRENT`` can admit:
+#: the pull request, read fresh, still has the evaluated head and the very body the rest of the gate judges.
+#: A re-run replays its original event, so a body edited since then (a grant marker added, say) must not be
+#: judged as if it were still the old one; the machine pushes again and a fresh run reads the new body.
+CONTEXT_CURRENT = "CURRENT"
+CONTEXT_UNREAD = "UNREAD"
+CONTEXT_HEAD_MOVED = "HEAD_MOVED"
+CONTEXT_BODY_CHANGED = "BODY_CHANGED"
+CONTEXTS = (CONTEXT_CURRENT, CONTEXT_UNREAD, CONTEXT_HEAD_MOVED, CONTEXT_BODY_CHANGED)
+
+
+def enabled(binding) -> bool:
+    """Whether the trusted binding switches the route on. The workflow collects nothing otherwise."""
+    return isinstance(binding, dict) and binding.get("activation") == "enabled"
+
 
 def validate_binding(binding) -> None:
     """``ValueError`` unless ``binding`` is exactly ``{schema, activation}``."""
@@ -54,12 +70,26 @@ def validate_binding(binding) -> None:
         raise ValueError(f"operator_approval must be {{schema: {SCHEMA!r}, activation: enabled|disabled}}")
 
 
-def collect(api, repository: str, number) -> list | None:
-    """Every review of one pull request, as the judge reads it, or ``None`` when the read is not complete.
+def collect(api, repository: str, number, head_sha, body) -> dict:
+    """``{"context", "reviews"}`` for one pull request, as the judge reads it.
 
-    ``api(path)`` is the workflow's read-only ``gh api`` call, returning parsed JSON or ``None``."""
+    ``head_sha`` and ``body`` are what the run's event recorded. ``reviews`` is ``None`` unless the context is
+    ``CURRENT`` and every page was read. ``api(path)`` is the workflow's read-only ``gh api`` call, returning
+    parsed JSON or ``None``; any exception it raises is the caller's to record as ``UNREAD``."""
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
-        return None
+        return {"context": CONTEXT_UNREAD, "reviews": None}
+    current = api(f"repos/{repository}/pulls/{number}")
+    if not isinstance(current, dict) or not isinstance(current.get("head"), dict):
+        return {"context": CONTEXT_UNREAD, "reviews": None}
+    if current["head"].get("sha") != head_sha:
+        return {"context": CONTEXT_HEAD_MOVED, "reviews": None}
+    if (current.get("body") or "") != (body or ""):
+        return {"context": CONTEXT_BODY_CHANGED, "reviews": None}
+    return {"context": CONTEXT_CURRENT, "reviews": _reviews(api, repository, number)}
+
+
+def _reviews(api, repository: str, number: int) -> list | None:
+    """Every review, or ``None`` when the read is not complete."""
     reviews: list = []
     for page in range(1, MAX_REVIEW_PAGES + 1):
         rows = api(f"repos/{repository}/pulls/{number}/reviews?per_page={PAGE_SIZE}&page={page}")
@@ -119,8 +149,14 @@ def refusal(policy, evidence, repository: str, head_sha: str) -> str | None:
     head = (head_sha or "").strip().lower()
     if _SHA.fullmatch(head) is None or pr.get("head_sha") != head:
         return OPERATOR_APPROVAL_HEAD_MISMATCH
-    reviews = pr.get("reviews")
-    if not isinstance(reviews, list) or not all(_well_formed(r) for r in reviews):
+    approval = pr.get("approval")
+    if not isinstance(approval, dict) or approval.get("context") not in CONTEXTS:
+        return OPERATOR_APPROVAL_REVIEWS_UNREADABLE
+    if approval["context"] in (CONTEXT_HEAD_MOVED, CONTEXT_BODY_CHANGED):
+        return OPERATOR_APPROVAL_CONTEXT_CHANGED
+    reviews = approval.get("reviews")
+    if (approval["context"] != CONTEXT_CURRENT or not isinstance(reviews, list)
+            or not all(_well_formed(r) for r in reviews)):
         return OPERATOR_APPROVAL_REVIEWS_UNREADABLE
     ids = [r["id"] for r in reviews]
     if len(ids) != len(set(ids)):
