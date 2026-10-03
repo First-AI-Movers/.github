@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -165,6 +166,38 @@ class RefusalTests(unittest.TestCase):
         self.assertEqual(self.judge(evidence([review(4), review(3, "CHANGES_REQUESTED")])), None)
         self.assertEqual(self.judge(evidence([review(3), review(4, "CHANGES_REQUESTED")])),
                          oa.OPERATOR_APPROVAL_NOT_APPROVED)
+
+
+class WithdrawnTests(unittest.TestCase):
+    """The gate job's last step: an approval that admitted this run must still hold when it publishes."""
+
+    def test_a_revocation_edit_or_push_before_publication_withdraws_it(self):
+        later = "2026-10-03T13:00:00Z"
+        cases = {
+            "change requested": ({"context": oa.CONTEXT_CURRENT,
+                                  "reviews": [review(1), review(2, "CHANGES_REQUESTED", at=later)]},
+                                 oa.OPERATOR_APPROVAL_NOT_APPROVED),
+            "dismissed": ({"context": oa.CONTEXT_CURRENT, "reviews": [review(1, "DISMISSED")]},
+                          oa.OPERATOR_APPROVAL_NOT_APPROVED),
+            "description edited": ({"context": oa.CONTEXT_BODY_CHANGED, "reviews": None},
+                                   oa.OPERATOR_APPROVAL_CONTEXT_CHANGED),
+            "head pushed": ({"context": oa.CONTEXT_HEAD_MOVED, "reviews": None}, oa.OPERATOR_APPROVAL_CONTEXT_CHANGED),
+            "unreadable": ({"context": oa.CONTEXT_UNREAD, "reviews": None}, oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE),
+        }
+        for name, (fresh, reason) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(oa.withdrawn(policy(), evidence(), REPO, HEAD, fresh), reason)
+
+    def test_an_approval_that_still_holds_publishes(self):
+        fresh = {"context": oa.CONTEXT_CURRENT,
+                 "reviews": [review(1), review(2, "COMMENTED", at="2026-10-03T13:00:00Z")]}
+        self.assertIsNone(oa.withdrawn(policy(), evidence(), REPO, HEAD, fresh))
+
+    def test_a_verdict_that_never_rested_on_an_approval_is_untouched(self):
+        revoked = {"context": oa.CONTEXT_CURRENT, "reviews": [review(1, "DISMISSED")]}
+        for ev in (evidence([]), evidence(author=OPERATOR, author_type="User"), evidence(context=oa.CONTEXT_UNREAD)):
+            self.assertIsNone(oa.withdrawn(policy(), ev, REPO, HEAD, revoked))
+        self.assertIsNone(oa.withdrawn(policy("disabled"), evidence(), REPO, HEAD, revoked))
 
 
 class BindingAndCollectionTests(unittest.TestCase):
@@ -559,20 +592,37 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(job["concurrency"]["cancel-in-progress"], False)
         self.assertIn("github.event.pull_request.number", job["concurrency"]["group"])
 
-    def run_rerun(self, answers):
-        """Run the job's script with a fake ``gh`` answering the run listing from ``answers`` in order."""
+    GATE = ".github/workflows/aeos-merge-ready.yml"
+
+    @staticmethod
+    def listing(*runs, total=None):
+        rows = [{"id": i, "status": s, "path": path, "name": "aeos-merge-ready", "created_at": f"2026-10-03T12:00:{i:02d}Z"}
+                for i, s, path in runs]
+        return json.dumps({"total_count": len(rows) if total is None else total, "workflow_runs": rows})
+
+    def run_rerun(self, answers, posts_answers=None):
+        """Run the job's script with a fake ``gh``: GETs answer the run listing from ``answers`` in order (JSON, or
+        FAIL), POSTs answer from ``posts_answers`` (OK by default); the real ``jq`` filters the listing."""
+        if not shutil.which("jq"):
+            self.skipTest("jq is not installed here (it is on every GitHub-hosted runner)")
         script = self.rerun_document()["jobs"]["rerun"]["steps"][0]["run"]
         with tempfile.TemporaryDirectory() as temp:
             bin_dir = Path(temp, "bin")
             bin_dir.mkdir()
-            queue, posts = Path(temp, "queue"), Path(temp, "posts")
+            queue, posts, post_queue = Path(temp, "queue"), Path(temp, "posts"), Path(temp, "post_queue")
             queue.write_text("".join(a + "\n" for a in answers))
+            post_queue.write_text("".join(a + "\n" for a in (posts_answers or [])))
             posts.write_text("")
             (bin_dir / "gh").write_text(textwrap.dedent(f"""\
                 #!/bin/bash
-                if [ "$3" = "POST" ]; then echo "$4" >> {posts}; exit 0; fi
-                answer="$(head -n 1 {queue})"; tail -n +2 {queue} > {queue}.next; mv {queue}.next {queue}
-                case "$answer" in FAIL|"") exit 1 ;; EMPTY) exit 0 ;; *) echo "$answer" ;; esac
+                pop() {{ head -n 1 "$1"; tail -n +2 "$1" > "$1.next"; mv "$1.next" "$1"; }}
+                if [ "$3" = "POST" ]; then
+                  echo "$4" >> {posts}
+                  [ "$(pop {post_queue})" = "FAIL" ] && exit 1
+                  exit 0
+                fi
+                answer="$(pop {queue})"
+                case "$answer" in FAIL|"") exit 1 ;; *) echo "$answer" ;; esac
                 """))
             (bin_dir / "sleep").write_text("#!/bin/bash\nexit 0\n")
             for tool in ("gh", "sleep"):
@@ -581,23 +631,111 @@ class WorkflowTests(unittest.TestCase):
             proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
             return proc.returncode, posts.read_text().split()
 
-    def test_the_rerun_cancels_a_verdict_in_flight_then_re_runs_whatever_it_concluded(self):
+    def test_the_helper_re_runs_the_settled_gate_and_only_the_gate(self):
         runs = f"repos/{REPO}/actions/runs/"
+        gate_done = self.listing((11, "completed", self.GATE))
+        decoy = self.listing((11, "completed", self.GATE), (40, "completed", ".github/workflows/look-alike.yml"))
         cases = {
-            "completed now": (["11 completed"], 0, [runs + "11/rerun"]),
-            "in flight: cancelled once, then re-run": (["12 in_progress", "12 queued", "12 completed"], 0,
-                                                        [runs + "12/cancel", runs + "12/rerun"]),
-            "failed reads are retried": (["FAIL", "FAIL", "13 completed"], 0, [runs + "13/rerun"]),
-            "an empty read is never believed": (["EMPTY", "EMPTY", "EMPTY", "14 completed"], 0, [runs + "14/rerun"]),
-            "failures do not count as agreement": (["EMPTY", "FAIL", "EMPTY", "15 completed"], 0, [runs + "15/rerun"]),
-            "never found: a visible failure": (["EMPTY"] * 60, 1, []),
-            "never readable: a visible failure": (["FAIL"] * 60, 1, []),
-            "never completes: cancelled once, then a visible failure": (["16 in_progress"] * 60, 1,
-                                                                         [runs + "16/cancel"]),
+            "completed now": ([gate_done], None, 0, [runs + "11/rerun"]),
+            "a look-alike named aeos-merge-ready is never chosen": ([decoy], None, 0, [runs + "11/rerun"]),
+            "in flight is waited for, never cancelled": (
+                [self.listing((12, "in_progress", self.GATE)), self.listing((12, "queued", self.GATE)),
+                 self.listing((12, "completed", self.GATE))], None, 0, [runs + "12/rerun"]),
+            "the newest gate run is the one re-run": (
+                [self.listing((13, "completed", self.GATE), (14, "completed", self.GATE))], None, 0, [runs + "14/rerun"]),
+            "failed reads are retried": (["FAIL", "FAIL", gate_done], None, 0, [runs + "11/rerun"]),
+            "an empty read is never believed": ([self.listing(), self.listing(), gate_done], None, 0,
+                                                [runs + "11/rerun"]),
+            "a failed re-run is asked again": ([gate_done, gate_done], ["FAIL", "OK"], 0,
+                                               [runs + "11/rerun", runs + "11/rerun"]),
+            "a re-run that never succeeds fails visibly": ([gate_done] * 60, ["FAIL"] * 60, 1,
+                                                           [runs + "11/rerun"] * 60),
+            "never found: a visible failure": ([self.listing()] * 60, None, 1, []),
+            "never readable: a visible failure": (["FAIL"] * 60, None, 1, []),
+            "never settles: a visible failure": ([self.listing((15, "in_progress", self.GATE))] * 60, None, 1, []),
+            "more runs than one page: a visible failure": ([self.listing((11, "completed", self.GATE), total=101)],
+                                                           None, 1, []),
         }
-        for name, (answers, code, posted) in cases.items():
+        for name, (answers, post_answers, code, posted) in cases.items():
             with self.subTest(name):
-                self.assertEqual(self.run_rerun(answers), (code, posted))
+                self.assertEqual(self.run_rerun(answers, post_answers), (code, posted))
+
+    # -- the gate job's last step ------------------------------------------------------------------------------
+    def recheck_script(self) -> str:
+        import yaml
+        document = yaml.safe_load((WORKFLOWS / "aeos-merge-ready.yml").read_text())
+        steps = document["jobs"]["aeos-merge-ready"]["steps"]
+        self.assertEqual(steps[-1]["name"], "Recheck the operator's approval before this verdict publishes")
+        self.assertEqual(steps[-1]["if"], "success()")
+        return steps[-1]["run"].split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
+
+    def run_recheck(self, doc, *, repository=REPO, reads=None, raises=False):
+        """Execute the last step with the evidence file ``doc`` and ``gh api`` answered from ``reads``."""
+        calls = []
+        reads = list(reads or [])
+
+        def run(argv, **kwargs):
+            calls.append(argv[2])
+            if raises:
+                raise subprocess.TimeoutExpired(argv, 30)
+            result = reads.pop(0) if reads else None
+            return SimpleNamespace(returncode=0 if result is not None else 1,
+                                   stdout=json.dumps(result) if result is not None else "")
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "evidence.json"
+            path.write_text(json.dumps(doc) if doc is not None else "{not json")
+            summary = Path(temp) / "summary.md"
+            environment = dict(AEOS_ACTOR_EVIDENCE=str(path), AEOS_REPOSITORY=repository, AEOS_HEAD_SHA=HEAD,
+                               GITHUB_STEP_SUMMARY=str(summary))
+            out = []
+            with mock.patch.dict(os.environ, environment), mock.patch("subprocess.run", run), \
+                    mock.patch.object(dp, "load_policy", return_value=self.bound()), \
+                    mock.patch.object(sys, "path", sys.path[:]), mock.patch("builtins.print", out.append):
+                try:
+                    exec(compile(textwrap.dedent(self.recheck_script()), "<gate recheck>", "exec"), {})
+                    code = 0
+                except SystemExit as stop:
+                    code = stop.code or 0
+            return code, out, calls
+
+    def test_the_last_step_fails_a_pass_whose_approval_was_withdrawn(self):
+        pr_now = {"head": {"sha": HEAD}, "body": ""}
+        approved = {"id": 1, "user": {"login": OPERATOR, "type": "User"}, "state": "APPROVED",
+                    "commit_id": HEAD, "submitted_at": "2026-10-03T12:00:00Z"}
+        revoked = dict(approved, id=2, state="CHANGES_REQUESTED", submitted_at="2026-10-03T13:00:00Z")
+        doc = evidence()
+        code, out, calls = self.run_recheck(doc, reads=[pr_now, [approved, revoked], pr_now])
+        self.assertEqual(code, 1)
+        self.assertEqual(out[0], "AEOS_MERGE_READY_RESULT: FAIL " + dp.DERIVATION_POLICY_DIFF_UNSIGNED)
+        self.assertIn(oa.OPERATOR_APPROVAL_NOT_APPROVED, out[1])
+        self.assertIn(gate.DERIVATION_POLICY_DIFF_UNSIGNED, gate.REASON_CODES)
+        # in this repository the same withdrawal is lock 5's code
+        policy_doc = evidence(repository="First-AI-Movers/.github")
+        code, out, _calls = self.run_recheck(policy_doc, repository="First-AI-Movers/.github",
+                                             reads=[pr_now, [approved, revoked], pr_now])
+        self.assertEqual((code, out[0]), (1, "AEOS_MERGE_READY_RESULT: FAIL " + gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR))
+        # an edit that landed meanwhile, or a re-read that fails, withdraws it too
+        code, out, _calls = self.run_recheck(doc, reads=[{"head": {"sha": HEAD}, "body": "edited"}])
+        self.assertEqual(code, 1)
+        self.assertIn(oa.OPERATOR_APPROVAL_CONTEXT_CHANGED, out[1])
+        code, out, _calls = self.run_recheck(doc, raises=True)
+        self.assertEqual(code, 1)
+        self.assertIn(oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE, out[1])
+
+    def test_the_last_step_lets_a_still_approved_pass_publish(self):
+        pr_now = {"head": {"sha": HEAD}, "body": ""}
+        approved = {"id": 1, "user": {"login": OPERATOR, "type": "User"}, "state": "APPROVED",
+                    "commit_id": HEAD, "submitted_at": "2026-10-03T12:00:00Z"}
+        code, out, calls = self.run_recheck(evidence(), reads=[pr_now, [approved], pr_now])
+        self.assertEqual((code, out), (0, []))
+        self.assertEqual(len(calls), 3)
+
+    def test_the_last_step_never_touches_a_verdict_that_did_not_rest_on_an_approval(self):
+        no_route = evidence()
+        no_route["pull_request"].pop("approval")
+        for doc in (no_route, evidence([]), evidence(author=OPERATOR, author_type="User"), None):
+            with self.subTest(doc=str(doc)[:40]):
+                self.assertEqual(self.run_recheck(doc, raises=True), (0, [], []))
 
 
 if __name__ == "__main__":

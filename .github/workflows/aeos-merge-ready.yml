@@ -231,3 +231,62 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit 1
+
+      - name: Recheck the operator's approval before this verdict publishes
+        # agent-toolkit #3052. A pass that rested on the operator's approval of this head is re-read here,
+        # last, with the same collector: if the approval was withdrawn, or the pull request's head or
+        # description changed, while this run was judging, the run fails instead of publishing a stale
+        # success. A run whose evidence carries no approval, or whose approval never held, is untouched.
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AEOS_REPOSITORY: ${{ github.repository }}
+          AEOS_HEAD_SHA: >-
+            ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha
+            || github.event_name == 'pull_request' && github.event.pull_request.head.sha
+            || github.sha }}
+          AEOS_ACTOR_EVIDENCE: ${{ runner.temp }}/aeos-actor-evidence.json
+        run: |
+          set -uo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, os.path.abspath('policy/aeos'))
+          repo = os.environ.get("AEOS_REPOSITORY", "")
+          head = os.environ.get("AEOS_HEAD_SHA", "")
+          def api(path, *args):
+              r = subprocess.run(["gh", "api", path, *args], capture_output=True, text=True, timeout=30, check=False)
+              return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+          try:
+              with open(os.environ["AEOS_ACTOR_EVIDENCE"], encoding="utf-8") as handle:
+                  doc = json.load(handle)
+          except Exception:  # noqa: BLE001 - the gate step judged this evidence already; no approval rested on it
+              sys.exit(0)
+          pr = doc.get("pull_request") if isinstance(doc, dict) else None
+          if not isinstance(pr, dict) or "approval" not in pr:
+              sys.exit(0)
+          import derivation_policy
+          import merge_ready_gate
+          import operator_approval
+          code = (merge_ready_gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR
+                  if repo.strip().lower() == merge_ready_gate.POLICY_REPOSITORY
+                  else derivation_policy.DERIVATION_POLICY_DIFF_UNSIGNED)
+          try:
+              policy = derivation_policy.load_policy('policy/aeos')
+              if operator_approval.refusal(policy, doc, repo, head) is not None:
+                  sys.exit(0)
+              fresh = operator_approval.collect(api, repo, pr.get("number"), pr.get("head_sha"), pr.get("body"))
+              reason = operator_approval.withdrawn(policy, doc, repo, head, fresh)
+          except Exception as error:  # noqa: BLE001 - an approval that cannot be re-read never publishes a pass
+              reason = f"{operator_approval.OPERATOR_APPROVAL_REVIEWS_UNREADABLE} ({type(error).__name__})"
+          if reason is None:
+              sys.exit(0)
+          line = f"AEOS_MERGE_READY_RESULT: FAIL {code}"
+          detail = f"the operator's approval of this head no longer holds at publication: {reason}"
+          print(line)
+          print(detail)
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as handle:
+                  handle.write(f"## aeos-merge-ready\n\n{line}\n\n- {detail}\n")
+          sys.exit(1)
+          PY

@@ -3,18 +3,22 @@
 # The merge-ready gate admits a machine-authored change that a pinned operator approved on the exact
 # head (aeos/operator_approval.py), and it judges the description it was triggered with. A review or a
 # description edit is not one of its triggers. So on an approval, a change request, a dismissal or an
-# edit, this re-runs the latest aeos-merge-ready run at the pull request's head, whatever it concluded:
-# an approval can turn a refusal green; a change request, a dismissal or an edited description turns an
-# approval-based green back into a refusal. A gate run still in flight is cancelled first, so a verdict
-# read before the change can never publish a mergeable success; the re-run replaces it. A run that
-# cannot be found or re-run within the bound fails this job visibly; absence is never believed.
+# edit, this re-runs the latest aeos-merge-ready run at the pull request's head once it has settled,
+# whatever it concluded: an approval can turn a refusal green; a change request, a dismissal or an
+# edited description turns an approval-based green back into a refusal.
 #
-# Residual, stated: a green already published and consumed by auto-merge before this job starts cannot be
+# This job is not the barrier against a stale verdict; the gate job is. Its last step re-reads the
+# approval and the pull request before an approval-based pass publishes, so a run that was judging when
+# the decision changed fails by itself, whichever run it is. This job only re-judges verdicts that had
+# already settled. The gate is selected by its exact workflow path, which the workflow floor reserves to
+# the organization; a display name proves nothing. A run it cannot find or re-run within the bound fails
+# this job visibly; absence is never believed.
+#
+# Residual, stated: a green already published and consumed by auto-merge before the change cannot be
 # recalled. That is the same interval an operator-opened change has between a green gate and its merge;
-# the remedy is a revert.
-#
-# Nothing here decides anything: a re-run keeps the original run's actor and the gate re-reads every
-# fact, from trusted policy. It is not a required workflow and publishes no `aeos-merge-ready` context.
+# the remedy is a revert. Nothing here decides anything: a re-run keeps the original run's actor and the
+# gate re-reads every fact, from trusted policy. It is not a required workflow and publishes no
+# `aeos-merge-ready` context.
 name: aeos-approval-rerun
 
 on:
@@ -41,40 +45,39 @@ jobs:
     permissions:
       actions: write
     steps:
-      - name: Re-run the merge-ready verdict at the current head
+      - name: Re-run the settled merge-ready verdict at the current head
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          # The latest run of the gate itself at this head: "<id> <status>", "" for none, TOO_MANY when the
+          # one page cannot hold every run at this head.
           latest() {
             gh api "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}&event=pull_request&per_page=100" \
-              --jq '[.workflow_runs[] | select(.name == "aeos-merge-ready")] | sort_by(.created_at) | last
-                    | select(. != null) | "\(.id) \(.status)"'
+              | jq -r '.total_count as $n | if $n > 100 then "TOO_MANY" else
+                  ([.workflow_runs[] | select(.path == ".github/workflows/aeos-merge-ready.yml")]
+                   | sort_by(.created_at, .id) | last | if . == null then "" else "\(.id) \(.status)" end) end'
           }
-          # Bounded: at most 60 reads, 10 s apart. A failed or empty read is retried, never taken as "no run".
-          # A run in flight is cancelled once (its verdict was read before this change), then re-run when it
-          # has settled.
-          cancelled=""
+          # Bounded: at most 60 reads, 10 s apart. A failed or empty read is retried, never taken as "no run";
+          # a run still in flight is waited for; a re-run that fails is asked again.
           run_id=""
           for _ in $(seq 1 60); do
             if ! found="$(latest)" || [ -z "$found" ]; then
               sleep 10
               continue
             fi
-            read -r run_id status <<<"$found"
-            if [ "$status" != "completed" ]; then
-              if [ "$cancelled" != "$run_id" ]; then
-                gh api -X POST "repos/${REPO}/actions/runs/${run_id}/cancel" >/dev/null || true
-                cancelled="$run_id"
-              fi
-              sleep 10
-              continue
+            if [ "$found" = "TOO_MANY" ]; then
+              echo "::error::more than 100 runs at ${HEAD_SHA}; the gate's latest run cannot be identified from one page."
+              exit 1
             fi
-            gh api -X POST "repos/${REPO}/actions/runs/${run_id}/rerun"
-            echo "Re-ran aeos-merge-ready run ${run_id} at ${HEAD_SHA}."
-            exit 0
+            read -r run_id status <<<"$found"
+            if [ "$status" = "completed" ] && gh api -X POST "repos/${REPO}/actions/runs/${run_id}/rerun" >/dev/null; then
+              echo "Re-ran aeos-merge-ready run ${run_id} at ${HEAD_SHA}."
+              exit 0
+            fi
+            sleep 10
           done
           echo "::error::the aeos-merge-ready run at ${HEAD_SHA} (${run_id:-never found}) was not re-run within the bound; the change was not re-judged."
           exit 1

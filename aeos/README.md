@@ -322,19 +322,26 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
 
   The identity standard is the predecessor's: the same pinned logins. What is bound is one commit,
   narrower than any envelope. The machine never approves, and GitHub never lets a pull request's
-  author approve it. `.github/workflows/aeos-approval-rerun.yml` re-runs the latest
-  `aeos-merge-ready` run at the head whenever the decision or the description changes: an
-  approval, a change request, a dismissal or an edit, whatever that run concluded. So a
-  revocation or an edit turns an approval-based green back into a refusal.
-  - A gate run still in flight is cancelled first, so a verdict read before the change never
-    publishes a mergeable success.
-  - Jobs queue per pull request on the job itself, so a skipped comment-only review never
-    displaces one.
-  - A run it cannot find or re-run within the bound fails the job visibly; absence is never
-    believed.
-  - A re-run keeps the machine as the run's actor, and the gate re-reads every fact itself.
+  author approve it.
 
-  Residual: a green already published and consumed by auto-merge before the job starts cannot be
+  Two pieces keep a verdict current when the decision changes:
+  - **The barrier is the gate job's last step.** When this run's evidence holds an approval that
+    admitted it, the step re-reads the approval and the pull request with the same collector just
+    before the pass publishes. If the approval was withdrawn, or the head or description changed,
+    while the run was judging, the run fails with the route's typed reason
+    (`DERIVATION_POLICY_DIFF_UNSIGNED`, or `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` here), whichever
+    run it is and whatever else is in flight. A run whose evidence carries no approval, or whose
+    approval never held, is untouched.
+  - **`.github/workflows/aeos-approval-rerun.yml` re-judges verdicts that had already settled.** On
+    an approval, a change request, a dismissal or a description edit, it re-runs the latest gate run
+    at the head once it has settled, whatever it concluded. It selects the gate by its exact workflow
+    path, which the workflow floor reserves to the organization; a display name proves nothing. Jobs
+    queue per pull request on the job itself. A run it cannot find or re-run within the bound fails
+    the job visibly; absence is never believed. The consumer route exists only for the policy's
+    target repository, which carries the same file (agent-toolkit `.github/workflows/aeos-approval-rerun.yml`,
+    with its CI-portfolio register entry).
+
+  Residual: a green already published and consumed by auto-merge before the change cannot be
   recalled. That is the interval an operator-opened change has today between a green gate and its
   merge, and the remedy is a revert. Residual, as above: a
   process acting under the operator's own credential could submit an approval, exactly as it

@@ -185,3 +185,16 @@ def refusal(policy, evidence, repository: str, head_sha: str) -> str | None:
     if latest["commit_id"] != head:
         return OPERATOR_APPROVAL_STALE_HEAD
     return None
+
+
+def withdrawn(policy, evidence, repository: str, head_sha: str, fresh) -> str | None:
+    """Why an approval that held when this run collected its evidence no longer holds in ``fresh`` (a second
+    :func:`collect`, made just before the run publishes), or ``None``.
+
+    ``None`` also when the collected approval never held: this run's verdict did not rest on it, so a
+    later change cannot invalidate it. This is the barrier that keeps a verdict read before a revocation, an
+    edit or a push from publishing a mergeable success: the run itself re-reads, whatever else is in flight."""
+    if refusal(policy, evidence, repository, head_sha) is not None:
+        return None
+    pr = dict(evidence["pull_request"], approval=fresh)
+    return refusal(policy, dict(evidence, pull_request=pr), repository, head_sha)
