@@ -957,7 +957,8 @@ def _within_envelope(path: str, envelope: list[str], *, exact_only: bool = False
 
 
 def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | None,
-                  repository: str, entries: list[Entry], now: float, head_sha: str | None = None) -> str | None:
+                  repository: str, entries: list[Entry], now: float, head_sha: str | None = None,
+                  admission: dict | None = None) -> str | None:
     """``None`` when the machine route admits this protected diff; otherwise the ONE typed
     reason it does not. Every conjunct is checked; the first failure names the reason."""
     if not policy.machine_route_enabled:
@@ -1006,6 +1007,9 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
     if grant_state == scoped_grant.MARKER_ABSENT and policy.operator_approval is not None:
         approval = operator_approval.refusal(policy, evidence, repository, head_sha or "")
         if approval is None:
+            if admission is not None:
+                # The pass rests on the approval: the gate job re-reads it before publishing.
+                admission["operator_approval"] = True
             return None
     ref = programme_ref_from_body(pr.get("body", ""))
     if ref is None:
@@ -1087,6 +1091,7 @@ def evaluate_derivation_policy(
     policy_dir: str,
     now=time.time,
     evidence_path: str | None = None,
+    admission: dict | None = None,
 ) -> list[tuple[str, str, str]]:
     """``(code, path, detail)`` findings for the derivation-policy conjunct.
 
@@ -1121,7 +1126,8 @@ def evaluate_derivation_policy(
     # operator-authored programme authority needs no operator signature (#3752).
     stamp = now()
     evidence, evidence_reason = load_evidence(evidence_path, candidate_dir=candidate_dir)
-    route_reason = machine_route(policy, evidence, evidence_reason, repository, entries, stamp, head_sha=head_sha)
+    route_reason = machine_route(policy, evidence, evidence_reason, repository, entries, stamp, head_sha=head_sha,
+                                 admission=admission)
     if route_reason is None:
         return findings
 

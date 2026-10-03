@@ -308,6 +308,15 @@ class MachineRouteTests(unittest.TestCase):
         marked = evidence(body="<!-- aeos-programme: First-AI-Movers/agent-toolkit#6246 -->")
         self.assertIsNone(self.route(marked))
 
+    def test_the_route_records_that_the_approval_admitted_it(self):
+        admission = {}
+        self.assertIsNone(dp.machine_route(self.policy, evidence(), None, REPO, [self.entry], 0.0, head_sha=HEAD,
+                                           admission=admission))
+        self.assertEqual(admission, {"operator_approval": True})
+        admission = {}
+        dp.machine_route(self.policy, evidence([]), None, REPO, [self.entry], 0.0, head_sha=HEAD, admission=admission)
+        self.assertEqual(admission, {})
+
     def test_without_the_approval_the_route_says_why(self):
         self.assertEqual(self.route(evidence([])), oa.OPERATOR_APPROVAL_ABSENT)
         self.assertEqual(self.route(evidence([review(1, commit=OLDER)])), oa.OPERATOR_APPROVAL_STALE_HEAD)
@@ -369,6 +378,29 @@ class MachineRouteTests(unittest.TestCase):
             self.assertEqual([f[0] for f in findings], [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
             self.assertIn(oa.OPERATOR_APPROVAL_STALE_HEAD, findings[0][2])
 
+    def test_a_protected_pass_through_the_gate_is_marked_approval_dependent(self):
+        """The gate's report carries the derivation route's dependence, so the workflow rechecks it."""
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Repo(temp)
+            repo.write("scripts/x.py", "X = 1\n")
+            repo.base = repo.commit("seed")
+            repo.write("scripts/x.py", "X = 2\n")
+            head = repo.commit("protected change")
+            policy_dir = tempfile.mkdtemp(dir=temp)
+            document = json.loads(POLICY_FILE.read_text())
+            document["derivation_policy"].update(roots=["scripts/x.py"], allowlist_prefixes=[],
+                                                 allowlist_files=["scripts/x.py"], members=["scripts/x.py"])
+            document["machine_route"].pop("authority_compiler")
+            document["machine_route"].pop("scoped_grant")
+            Path(policy_dir, dp.POLICY_FILE).write_text(json.dumps(document))
+            for rows, passed in (([review(1, commit=head)], True), ([], False)):
+                with self.subTest(passed=passed):
+                    path = Path(tempfile.mkdtemp(prefix="aeos-evidence-")) / "evidence.json"
+                    path.write_text(json.dumps(evidence(rows, head=head)))
+                    report = gate.evaluate(candidate_dir=repo.root, repository=REPO, base_sha=repo.base, head_sha=head,
+                                           event_name="pull_request", policy_dir=policy_dir, evidence_path=str(path))
+                    self.assertEqual((report.passed, report.approval_dependent), (passed, passed))
+
 
 class JudgeChangeTests(unittest.TestCase):
     """Lock 5 in this repository: a change to the judge."""
@@ -405,6 +437,42 @@ class JudgeChangeTests(unittest.TestCase):
         head = self.judge_change()
         report = self.gate_with(head, self.machine_evidence(head, [review(1, commit=head)]))
         self.assertNotIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, self.codes(report))
+
+    def test_the_report_says_when_a_pass_rests_on_the_approval(self):
+        """Round 4 P2: only a pass the approval actually admitted is rechecked before it publishes."""
+        head = self.judge_change()
+        report = self.gate_with(head, self.machine_evidence(head, [review(1, commit=head)]))
+        self.assertTrue(report.approval_dependent)
+        operator = evidence([review(1, commit=head)], author=OPERATOR, author_type="User", actor=OPERATOR,
+                            head_commit=OPERATOR, head=head, repository="First-AI-Movers/.github")
+        self.assertFalse(self.gate_with(head, operator).approval_dependent)
+        # an approved machine change that touches no control-plane path never rested on the approval
+        self.repo.write("README.md", "# fixture, edited\n")
+        readme = self.repo.commit("machine edits the readme")
+        self.repo.base = head
+        report = self.gate_with(readme, self.machine_evidence(readme, [review(1, commit=readme)]))
+        self.assertTrue(report.passed)
+        self.assertFalse(report.approval_dependent)
+
+    def test_the_cli_records_the_dependence_only_on_a_pass(self):
+        head = self.judge_change()
+        for rows, passed in (([review(1, commit=head)], True), ([], False)):
+            with self.subTest(passed=passed):
+                path = Path(tempfile.mkdtemp(prefix="aeos-evidence-")) / "evidence.json"
+                path.write_text(json.dumps(self.machine_evidence(head, rows)))
+                marker = Path(tempfile.mkdtemp()) / "marker.json"
+                with mock.patch.object(gate, "_evaluate_guarded",
+                                       lambda **kw: gate.evaluate(policy_dir=self.policy_dir, **kw)), \
+                        mock.patch("sys.stdout"), mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": ""}):
+                    code = gate.main(["--candidate-dir", self.repo.root, "--repository", "First-AI-Movers/.github",
+                                      "--base-sha", self.repo.base, "--head-sha", head, "--event-name", "pull_request",
+                                      "--evidence-file", str(path), "--approval-marker-file", str(marker)])
+                self.assertEqual(code, 0 if passed else 1)
+                if passed:
+                    self.assertEqual(json.loads(marker.read_text()),
+                                     {"schema": gate.APPROVAL_MARKER_SCHEMA, "approval_dependent": True})
+                else:
+                    self.assertFalse(marker.exists())
 
     def test_without_that_approval_it_is_refused_and_says_why(self):
         head = self.judge_change()
@@ -669,7 +737,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(steps[-1]["if"], "success()")
         return steps[-1]["run"].split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
 
-    def run_recheck(self, doc, *, repository=REPO, reads=None, raises=False):
+    def run_recheck(self, doc, *, repository=REPO, reads=None, raises=False, marker=None, unimportable=None):
         """Execute the last step with the evidence file ``doc`` and ``gh api`` answered from ``reads``."""
         calls = []
         reads = list(reads or [])
@@ -687,10 +755,16 @@ class WorkflowTests(unittest.TestCase):
             summary = Path(temp) / "summary.md"
             environment = dict(AEOS_ACTOR_EVIDENCE=str(path), AEOS_REPOSITORY=repository, AEOS_HEAD_SHA=HEAD,
                                GITHUB_STEP_SUMMARY=str(summary))
+            if marker is not None:
+                marker_path = Path(temp) / "marker.json"
+                marker_path.write_text(marker if isinstance(marker, str) else json.dumps(marker))
+                environment["AEOS_APPROVAL_MARKER"] = str(marker_path)
+            modules = {name: None for name in (unimportable or ())}
             out = []
             with mock.patch.dict(os.environ, environment), mock.patch("subprocess.run", run), \
                     mock.patch.object(dp, "load_policy", return_value=self.bound()), \
-                    mock.patch.object(sys, "path", sys.path[:]), mock.patch("builtins.print", out.append):
+                    mock.patch.object(sys, "path", sys.path[:]), mock.patch("builtins.print", out.append), \
+                    mock.patch.dict(sys.modules, modules):
                 try:
                     exec(compile(textwrap.dedent(self.recheck_script()), "<gate recheck>", "exec"), {})
                     code = 0
@@ -721,6 +795,43 @@ class WorkflowTests(unittest.TestCase):
         code, out, _calls = self.run_recheck(doc, raises=True)
         self.assertEqual(code, 1)
         self.assertIn(oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE, out[1])
+
+    def test_the_last_step_skips_only_on_an_explicit_not_dependent_marker(self):
+        pr_now = {"head": {"sha": HEAD}, "body": ""}
+        dismissed = {"id": 1, "user": {"login": OPERATOR, "type": "User"}, "state": "DISMISSED",
+                     "commit_id": HEAD, "submitted_at": "2026-10-03T12:00:00Z"}
+        not_dependent = {"schema": gate.APPROVAL_MARKER_SCHEMA, "approval_dependent": False}
+        self.assertEqual(self.run_recheck(evidence(), marker=not_dependent, raises=True), (0, [], []))
+        for marker in ({"schema": gate.APPROVAL_MARKER_SCHEMA, "approval_dependent": True}, "{garbled", [1]):
+            with self.subTest(marker=marker):
+                code, out, _calls = self.run_recheck(evidence(), marker=marker, reads=[pr_now, [dismissed], pr_now])
+                self.assertEqual(code, 1)
+                self.assertIn(oa.OPERATOR_APPROVAL_NOT_APPROVED, out[1])
+
+    def test_an_unloadable_policy_fails_the_last_step_typed(self):
+        """Round 4: an import failure is a typed refusal, never a traceback."""
+        code, out, calls = self.run_recheck(evidence(), unimportable=["operator_approval"])
+        self.assertEqual(code, 1)
+        self.assertEqual(out[0], "AEOS_MERGE_READY_RESULT: FAIL EVIDENCE_UNREADABLE")
+        self.assertIn("EVIDENCE_UNREADABLE", gate.REASON_CODES)
+        self.assertEqual(calls, [])
+
+    def test_the_deployed_definition_pairs_collection_with_its_barrier(self):
+        """Round 4 P1: a definition that collects approvals always carries the recheck, so a re-run of an older
+        definition has no approval evidence and the route refuses it."""
+        import yaml
+        document = yaml.safe_load((WORKFLOWS / "aeos-merge-ready.yml").read_text())
+        steps = document["jobs"]["aeos-merge-ready"]["steps"]
+        names = [s["name"] for s in steps]
+        collect = next(s for s in steps if s["name"].startswith("Collect authenticated evidence"))
+        gate_step = next(s for s in steps if s["name"] == "Gate")
+        self.assertIn("operator_approval.collect(", collect["run"])
+        self.assertIn("--approval-marker-file", gate_step["run"])
+        self.assertEqual(names[-1], "Recheck the operator's approval before this verdict publishes")
+        self.assertLess(names.index("Gate"), len(names) - 1)
+        legacy = evidence()
+        legacy["pull_request"].pop("approval")
+        self.assertEqual(oa.refusal(policy(), legacy, REPO, HEAD), oa.OPERATOR_APPROVAL_REVIEWS_UNREADABLE)
 
     def test_the_last_step_lets_a_still_approved_pass_publish(self):
         pr_now = {"head": {"sha": HEAD}, "body": ""}

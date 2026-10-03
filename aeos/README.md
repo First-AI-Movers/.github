@@ -325,8 +325,10 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   author approve it.
 
   Two pieces keep a verdict current when the decision changes:
-  - **The barrier is the gate job's last step.** When this run's evidence holds an approval that
-    admitted it, the step re-reads the approval and the pull request with the same collector just
+  - **The barrier is the gate job's last step.** The gate records, in a marker its CLI writes on a
+    pass, whether that pass rested on the approval (lock 5, or the derivation machine route). Only
+    an explicit "no" skips the step; a missing or unreadable marker counts as "yes". When the pass
+    rested on it, the step re-reads the approval and the pull request with the same collector just
     before the pass publishes. If the approval was withdrawn, or the head or description changed,
     while the run was judging, the run fails with the route's typed reason
     (`DERIVATION_POLICY_DIFF_UNSIGNED`, or `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` here), whichever
@@ -341,9 +343,16 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
     target repository, which carries the same file (agent-toolkit `.github/workflows/aeos-approval-rerun.yml`,
     with its CI-portfolio register entry).
 
-  Residual: a green already published and consumed by auto-merge before the change cannot be
-  recalled. That is the interval an operator-opened change has today between a green gate and its
-  merge, and the remedy is a revert. Residual, as above: a
+  A re-run executes the workflow definition of the run it repeats. Every definition that collects
+  approvals also carries the recheck, both arriving in one change; an older definition collects
+  none, so the route refuses it (`OPERATOR_APPROVAL_REVIEWS_UNREADABLE`).
+
+  Residual, stated: observing and publishing are not atomic. A revocation, edit or push that lands
+  after the run's last read of the reviews and the pull request cannot stop the pass that read
+  publishes, nor an auto-merge that consumes it. That window runs from the last observation to the
+  merge, normally seconds. It is the same window an operator-opened change has today between a
+  green gate and its merge, and the remedy is a revert. Closing it would need merge-time review
+  enforcement on every pull request, a ruleset change outside this design. Residual, as above: a
   process acting under the operator's own credential could submit an approval, exactly as it
   could author a pull request today; identity separation (#3752 M4) removes both. Rollback:
   `activation: disabled` restores the predecessor exactly.
