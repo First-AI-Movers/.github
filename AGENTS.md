@@ -48,11 +48,15 @@ review, do not wait. `aeos-merge-ready` is the one merge-blocking verdict.
 
 - **Who may change the judge.** A control-plane change here (`aeos/**`,
   `.github/workflows/**`, `.github/actions/**`, `.github/aeos-gate.json`,
-  `.github/aeos-smoke.json`) is judged on its content only when the trusted
-  evidence names a pinned operator principal (type User) as the PR author *and*
-  as the run's actor. A machine principal, any bot, or an empty or unreadable
-  author or actor is refused, whatever the content — a machine never edits the
-  policy that judges machines.
+  `.github/aeos-smoke.json`) is judged on its content only when the operator decided
+  it. Either the trusted evidence names a pinned operator principal (type User) as the
+  PR author *and* as the run's actor, or the machine principal authored, ran and
+  committed it and the operator's latest decisive review **approves that exact head**
+  (`aeos/operator_approval.py`). Anything else is refused, whatever the content.
+  A machine carries the mechanics but never decides the policy that judges machines:
+  it never approves, and an approval is stale after any push. So the operator is
+  never asked to open, arm or babysit a policy PR; prepare it, open it as the machine,
+  arm auto-merge, and put the decision in plain words at the top for his Approve.
 - **Deleting a control-plane path.** A deletion has no bytes, so no content floor
   can measure it, and this deletion reaches the gate that judges the whole
   organization. It is refused whoever authors it; an organization administrator

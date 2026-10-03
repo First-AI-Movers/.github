@@ -1,0 +1,47 @@
+# Re-judge a machine-authored pull request once the operator approves its exact head.
+#
+# The merge-ready gate admits a machine-authored change that a pinned operator approved on the exact
+# head (aeos/operator_approval.py). The gate ran when the machine opened the pull request, before any
+# approval existed, so this workflow re-runs that completed, non-green verdict when an approving review
+# lands on the current head. A re-run keeps the original run's actor (the machine). Nothing here
+# decides anything: the gate re-reads every fact itself, from trusted policy, and judges again.
+#
+# Ordinary repositories carry the same file; it is not a required workflow and publishes no
+# `aeos-merge-ready` context.
+name: aeos-approval-rerun
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+permissions: {}
+
+jobs:
+  rerun:
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Re-run the merge-ready verdict at the approved head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_COMMIT: ${{ github.event.review.commit_id }}
+        run: |
+          set -euo pipefail
+          if [ "$HEAD_SHA" != "$REVIEW_COMMIT" ]; then
+            echo "The approval names an earlier head; nothing to re-run."
+            exit 0
+          fi
+          run_id="$(gh api "repos/${REPO}/actions/runs?head_sha=${HEAD_SHA}&event=pull_request&per_page=100" \
+            --jq '[.workflow_runs[] | select(.name == "aeos-merge-ready")] | sort_by(.created_at) | last
+                  | select(. != null and .status == "completed" and .conclusion != "success") | .id')"
+          if [ -z "$run_id" ]; then
+            echo "No completed, non-green aeos-merge-ready run at this head; nothing to re-run."
+            exit 0
+          fi
+          gh api -X POST "repos/${REPO}/actions/runs/${run_id}/rerun"
+          echo "Re-ran aeos-merge-ready run ${run_id} at ${HEAD_SHA}."

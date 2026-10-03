@@ -54,6 +54,7 @@ from control_plane_proof import (  # noqa: E402
     evaluate_control_plane_file,
 )
 import derivation_policy  # noqa: E402
+import operator_approval  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Closed reason-code vocabulary. Nothing outside this tuple is ever emitted.
@@ -927,11 +928,18 @@ def evaluate(
             author, kind, actor = pull.get("author_login"), pull.get("author_type"), evidence.get("actor")
             identified_operator = (isinstance(author, str) and author in operators and kind == "User"
                                    and isinstance(actor, str) and actor in operators)
+            # #3052 paperwork removal: the machine may carry the mechanics of a judge change only when a pinned
+            # operator approved exactly this head. The decision stays his; the machine never approves.
+            approval = None
             if not identified_operator:
+                approval = (operator_approval.refusal(judge_policy, evidence, repository, head_sha)
+                            if judge_policy is not None else operator_approval.OPERATOR_APPROVAL_UNBOUND)
+            if not identified_operator and approval is not None:
                 report.findings.append(Finding(
                     CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, sorted(report.control_plane)[0],
-                    "only a positively identified operator may change the policy that judges machine "
-                    f"principals: author={author!r} ({kind!r}) actor={actor!r}",
+                    "only a positively identified operator, or his approval of this exact machine-authored "
+                    f"head, may change the policy that judges machine principals: author={author!r} "
+                    f"({kind!r}) actor={actor!r}; operator approval: {approval}",
                 ))
     strict = {p.lower() for p in report.control_plane}
 

@@ -110,6 +110,18 @@ jobs:
                   doc["pull_request"] = {"number": pr.get("number"), "author_login": user.get("login"),
                                          "author_type": user.get("type"), "head_sha": head_sha, "body": body,
                                          "head_commit_author_login": ((commit or {}).get("author") or {}).get("login")}
+                  # The trusted policy, read once. An unreadable policy binds no approval route here; the programme
+                  # read below re-raises its error, so that path fails closed exactly as before.
+                  trusted_error = None
+                  try:
+                      trusted = derivation_policy.load_policy('policy/aeos')
+                  except Exception as error:  # noqa: BLE001 - re-raised where the programme needs it
+                      trusted, trusted_error = None, error
+                  # #3052 paperwork removal: the reviews, only when the trusted policy binds the operator-approval
+                  # route. A read that is not complete records None, which the judge refuses; never "no review".
+                  if getattr(trusted, 'operator_approval', None) is not None:
+                      import operator_approval
+                      doc["pull_request"]["reviews"] = operator_approval.collect(api, repo, pr.get("number"))
                   refs = re.findall(r"<!--\s*aeos-programme:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)\s*-->", body)
                   if len(refs) == 1:
                       prepo, number = refs[0].split("#")
@@ -130,7 +142,8 @@ jobs:
                           doc["programme"] = {"ref": refs[0], "state": issue.get("state"), "author_login": iu.get("login"),
                                               "author_type": iu.get("type"), "body": issue.get("body") or "",
                                               "updated_at": issue.get("updated_at"), "editors": editors}
-                          trusted = derivation_policy.load_policy('policy/aeos')
+                          if trusted_error is not None:
+                              raise trusted_error
                           operand = getattr(trusted, 'comment_operand', None)
                           if operand is not None and operand['programme'] == refs[0]:
                               import comment_operand

@@ -170,6 +170,10 @@
       ],
       "admission_label": "agent-relay:auto-execute",
       "activation": "enabled"
+    },
+    "operator_approval": {
+      "schema": "aeos-operator-approval/v1",
+      "activation": "enabled"
     }
   }
 }
