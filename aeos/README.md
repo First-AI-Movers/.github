@@ -308,10 +308,10 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   - PR author, run actor and head-commit author are the pinned machine principal;
   - the evidence repository is the candidate's;
   - the evidence head is the evaluated head;
-  - the pull request, read fresh by the trusted workflow, still has that head and the very body
-    the rest of the gate judges (`OPERATOR_APPROVAL_CONTEXT_CHANGED` otherwise). A re-run replays
-    its original event, so a body edited since then, say to add a grant marker, is never judged
-    as the old one;
+  - the pull request, read fresh by the trusted workflow before and after the reviews, still has
+    that head and the very body the rest of the gate judges (`OPERATOR_APPROVAL_CONTEXT_CHANGED`
+    otherwise). A re-run replays its original event, so a body edited since then, say to add a
+    grant marker, is never judged as the old one, including an edit that lands mid-read;
   - the review list was read completely (at most three pages of 100; more is unreadable, never
     "no review"). The workflow reads reviews only while `activation` is `enabled`, and a failed
     read records `UNREAD` without costing any other evidence;
@@ -323,10 +323,20 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   The identity standard is the predecessor's: the same pinned logins. What is bound is one commit,
   narrower than any envelope. The machine never approves, and GitHub never lets a pull request's
   author approve it. `.github/workflows/aeos-approval-rerun.yml` re-runs the latest
-  `aeos-merge-ready` run at the head whenever the decision changes: an approval, a change request
-  or a dismissal, whatever that run concluded. So a revocation turns an approval-based green back
-  into a refusal. It waits, within a bound, for a run still in flight. A re-run keeps the
-  machine as the run's actor, and the gate re-reads every fact itself. Residual, as above: a
+  `aeos-merge-ready` run at the head whenever the decision or the description changes: an
+  approval, a change request, a dismissal or an edit, whatever that run concluded. So a
+  revocation or an edit turns an approval-based green back into a refusal.
+  - A gate run still in flight is cancelled first, so a verdict read before the change never
+    publishes a mergeable success.
+  - Jobs queue per pull request on the job itself, so a skipped comment-only review never
+    displaces one.
+  - A run it cannot find or re-run within the bound fails the job visibly; absence is never
+    believed.
+  - A re-run keeps the machine as the run's actor, and the gate re-reads every fact itself.
+
+  Residual: a green already published and consumed by auto-merge before the job starts cannot be
+  recalled. That is the interval an operator-opened change has today between a green gate and its
+  merge, and the remedy is a revert. Residual, as above: a
   process acting under the operator's own credential could submit an approval, exactly as it
   could author a pull request today; identity separation (#3752 M4) removes both. Rollback:
   `activation: disabled` restores the predecessor exactly.

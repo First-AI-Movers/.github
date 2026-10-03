@@ -73,19 +73,32 @@ def validate_binding(binding) -> None:
 def collect(api, repository: str, number, head_sha, body) -> dict:
     """``{"context", "reviews"}`` for one pull request, as the judge reads it.
 
-    ``head_sha`` and ``body`` are what the run's event recorded. ``reviews`` is ``None`` unless the context is
-    ``CURRENT`` and every page was read. ``api(path)`` is the workflow's read-only ``gh api`` call, returning
-    parsed JSON or ``None``; any exception it raises is the caller's to record as ``UNREAD``."""
+    ``head_sha`` and ``body`` are what the run's event recorded. The pull request is read fresh before AND after
+    the reviews, and both reads must still show that head and that body: an edit that lands while the reviews
+    are being read is never recorded as ``CURRENT``. ``reviews`` is ``None`` unless the context is ``CURRENT``
+    and every page was read. ``api(path)`` is the workflow's read-only ``gh api`` call, returning parsed JSON or
+    ``None``; any exception it raises is the caller's to record as ``UNREAD``."""
     if not isinstance(number, int) or isinstance(number, bool) or number < 1:
         return {"context": CONTEXT_UNREAD, "reviews": None}
-    current = api(f"repos/{repository}/pulls/{number}")
+    before = _context(api(f"repos/{repository}/pulls/{number}"), head_sha, body)
+    if before != CONTEXT_CURRENT:
+        return {"context": before, "reviews": None}
+    reviews = _reviews(api, repository, number)
+    after = _context(api(f"repos/{repository}/pulls/{number}"), head_sha, body)
+    if after != CONTEXT_CURRENT:
+        return {"context": after, "reviews": None}
+    return {"context": CONTEXT_CURRENT, "reviews": reviews}
+
+
+def _context(current, head_sha, body) -> str:
+    """Whether one fresh read of the pull request still shows the event's head and body."""
     if not isinstance(current, dict) or not isinstance(current.get("head"), dict):
-        return {"context": CONTEXT_UNREAD, "reviews": None}
+        return CONTEXT_UNREAD
     if current["head"].get("sha") != head_sha:
-        return {"context": CONTEXT_HEAD_MOVED, "reviews": None}
+        return CONTEXT_HEAD_MOVED
     if (current.get("body") or "") != (body or ""):
-        return {"context": CONTEXT_BODY_CHANGED, "reviews": None}
-    return {"context": CONTEXT_CURRENT, "reviews": _reviews(api, repository, number)}
+        return CONTEXT_BODY_CHANGED
+    return CONTEXT_CURRENT
 
 
 def _reviews(api, repository: str, number: int) -> list | None:

@@ -208,7 +208,7 @@ class BindingAndCollectionTests(unittest.TestCase):
         self.assertEqual(len(got["reviews"]), 130)
         self.assertEqual(set(got["reviews"][0]), {"id", "login", "type", "state", "commit_id", "submitted_at"})
         self.assertEqual(calls, [f"repos/{REPO}/pulls/7"] + [
-            f"repos/{REPO}/pulls/7/reviews?per_page=100&page={n}" for n in (1, 2)])
+            f"repos/{REPO}/pulls/7/reviews?per_page=100&page={n}" for n in (1, 2)] + [f"repos/{REPO}/pulls/7"])
         # a page that ends exactly full asks once more; an empty next page ends the read
         pages = {1: [row(i) for i in range(1, 101)]}
         self.assertEqual(len(oa.collect(api, REPO, 7, HEAD, "B")["reviews"]), 100)
@@ -235,6 +235,21 @@ class BindingAndCollectionTests(unittest.TestCase):
                          {"context": oa.CONTEXT_CURRENT, "reviews": []})
         for number in (None, 0, -1, True, "7"):
             self.assertEqual(oa.collect(api_for({}), REPO, number, HEAD, "B"), {"context": oa.CONTEXT_UNREAD, "reviews": None})
+
+    def test_a_change_that_lands_while_the_reviews_are_read_is_never_current(self):
+        """Review round 2 P1: the pull request is read before AND after the reviews; both must match."""
+        approval = [{"id": 1, "user": {"login": OPERATOR, "type": "User"}, "state": "APPROVED",
+                     "commit_id": HEAD, "submitted_at": "2026-10-03T12:00:00Z"}]
+        marker = "<!-- scoped-machine-grant: First-AI-Movers/agent-toolkit#9@sha256:" + "c" * 64 + " -->"
+        for second, context in (({"head": {"sha": HEAD}, "body": marker}, oa.CONTEXT_BODY_CHANGED),
+                                ({"head": {"sha": OLDER}, "body": ""}, oa.CONTEXT_HEAD_MOVED),
+                                (None, oa.CONTEXT_UNREAD)):
+            reads = [{"head": {"sha": HEAD}, "body": ""}, second]
+
+            def api(path, reads=reads):
+                return reads.pop(0) if path.endswith("/pulls/7") else approval
+            with self.subTest(context=context):
+                self.assertEqual(oa.collect(api, REPO, 7, HEAD, ""), {"context": context, "reviews": None})
 
     def test_only_enabled_switches_collection_on(self):
         self.assertTrue(oa.enabled({"schema": oa.SCHEMA, "activation": "enabled"}))
@@ -528,15 +543,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotEqual(job.get("name"), "aeos-merge-ready")
         self.assertEqual(job["permissions"], {"actions": "write"})
 
-    def test_every_change_of_decision_re_judges_and_nothing_else_does(self):
-        """Review P1: a change request or a dismissal must re-run a green verdict, not only an approval."""
+    def test_every_change_of_decision_or_description_re_judges_and_nothing_else_does(self):
+        """Review P1s: a change request, a dismissal or an edited description re-runs a green verdict too."""
         document = self.rerun_document()
         triggers = document.get("on", document.get(True))
-        self.assertEqual(triggers, {"pull_request_review": {"types": ["submitted", "dismissed"]}})
-        self.assertEqual(document["concurrency"]["cancel-in-progress"], False)
-        condition = " ".join(document["jobs"]["rerun"]["if"].split())
-        self.assertEqual(condition, "github.event.action == 'dismissed' || github.event.review.state == 'approved' "
+        self.assertEqual(triggers, {"pull_request_review": {"types": ["submitted", "dismissed"]},
+                                    "pull_request": {"types": ["edited"]}})
+        job = document["jobs"]["rerun"]
+        condition = " ".join(job["if"].split())
+        self.assertEqual(condition, "github.event_name == 'pull_request' || github.event.action == 'dismissed' "
+                                    "|| github.event.review.state == 'approved' "
                                     "|| github.event.review.state == 'changes_requested'")
+        # Review round 2 P2: the queue lives on the job, so a skipped (comment-only) event never displaces it.
+        self.assertNotIn("concurrency", document)
+        self.assertEqual(job["concurrency"]["cancel-in-progress"], False)
+        self.assertIn("github.event.pull_request.number", job["concurrency"]["group"])
 
     def run_rerun(self, answers):
         """Run the job's script with a fake ``gh`` answering the run listing from ``answers`` in order."""
@@ -560,16 +581,19 @@ class WorkflowTests(unittest.TestCase):
             proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
             return proc.returncode, posts.read_text().split()
 
-    def test_the_rerun_waits_for_the_gate_then_re_runs_whatever_it_concluded(self):
+    def test_the_rerun_cancels_a_verdict_in_flight_then_re_runs_whatever_it_concluded(self):
         runs = f"repos/{REPO}/actions/runs/"
         cases = {
             "completed now": (["11 completed"], 0, [runs + "11/rerun"]),
-            "in flight, then completed": (["12 in_progress", "12 queued", "12 completed"], 0, [runs + "12/rerun"]),
-            "a failed read is retried": (["FAIL", "FAIL", "13 completed"], 0, [runs + "13/rerun"]),
-            "one empty read is not believed": (["EMPTY", "14 completed"], 0, [runs + "14/rerun"]),
-            "two empty reads: no run at this head": (["EMPTY", "EMPTY"], 0, []),
-            "never completes: a visible failure": (["15 in_progress"] * 40, 1, []),
-            "never readable: a visible failure": (["FAIL"] * 40, 1, []),
+            "in flight: cancelled once, then re-run": (["12 in_progress", "12 queued", "12 completed"], 0,
+                                                        [runs + "12/cancel", runs + "12/rerun"]),
+            "failed reads are retried": (["FAIL", "FAIL", "13 completed"], 0, [runs + "13/rerun"]),
+            "an empty read is never believed": (["EMPTY", "EMPTY", "EMPTY", "14 completed"], 0, [runs + "14/rerun"]),
+            "failures do not count as agreement": (["EMPTY", "FAIL", "EMPTY", "15 completed"], 0, [runs + "15/rerun"]),
+            "never found: a visible failure": (["EMPTY"] * 60, 1, []),
+            "never readable: a visible failure": (["FAIL"] * 60, 1, []),
+            "never completes: cancelled once, then a visible failure": (["16 in_progress"] * 60, 1,
+                                                                         [runs + "16/cancel"]),
         }
         for name, (answers, code, posted) in cases.items():
             with self.subTest(name):
