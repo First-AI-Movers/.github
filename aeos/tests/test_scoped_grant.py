@@ -311,12 +311,31 @@ class ScopedGrantJudge(unittest.TestCase):
 
     def test_excluded_control_plane_and_root_paths_can_never_be_granted(self):
         root = sorted(self.policy.roots)[0]
-        for path in ("scripts/agent_relay/pr_open.py", ".github/workflows/x.yml", "aeos/derivation_policy.py",
+        for path in (".github/workflows/x.yml", "aeos/derivation_policy.py",
                      ".GITHUB/workflows/x.yml", root, "scripts/team_lead/runtime.py", "scripts/flight_deck/"):
             with self.subTest(path=path):
                 self.world.record_body = render_record(self.policy, block__path_envelope=[path])
                 self.world.record["body"] = self.world.record_body
                 self.assertEqual(self.verdict([entry(path)]), sg.SCOPED_GRANT_ENVELOPE_INVALID)
+
+    def test_the_shipped_binding_names_no_operator_only_member(self):
+        """The operator retired the operator-only list (2026-10-04): every allowlisted, non-root protected member,
+        machine identity and the write path included, is grantable through the machine route like any other."""
+        self.assertEqual(self.policy.scoped_grant["excluded_paths"], [])
+        for path in ("scripts/agent_relay/machine_identity.py", "scripts/agent_relay/pr_open.py"):
+            with self.subTest(path=path):
+                self.world.record_body = render_record(self.policy, block__path_envelope=[path])
+                self.world.record["body"] = self.world.record_body
+                self.assertIsNone(self.verdict([entry(path)]))
+
+    def test_a_binding_that_names_an_excluded_path_still_refuses_it(self):
+        """The exclusion mechanism itself is unchanged: a binding that lists a path refuses a grant naming it."""
+        path = "scripts/agent_relay/pr_open.py"
+        self.policy = load_policy(excluded_paths=[path])
+        self.world = World(self.policy)
+        self.world.record_body = render_record(self.policy, block__path_envelope=[path])
+        self.world.record["body"] = self.world.record_body
+        self.assertEqual(self.verdict([entry(path)]), sg.SCOPED_GRANT_ENVELOPE_INVALID)
 
     def test_a_wrong_repository_refuses(self):
         self.world.record_body = render_record(self.policy, block__repository="Other-Org/other")
