@@ -54,6 +54,7 @@ from control_plane_proof import (  # noqa: E402
     evaluate_control_plane_file,
 )
 import derivation_policy  # noqa: E402
+import operator_approval  # noqa: E402
 
 # --------------------------------------------------------------------------
 # Closed reason-code vocabulary. Nothing outside this tuple is ever emitted.
@@ -124,6 +125,8 @@ MAX_GATE_CONFIG_BYTES = 256 * 1024
 MAX_ALLOWLIST_PATTERNS = 5000
 
 POLICY_REPOSITORY = "first-ai-movers/.github"
+#: The approval marker the CLI writes on a pass (agent-toolkit #3052).
+APPROVAL_MARKER_SCHEMA = "aeos-approval-marker/v1"
 POLICY_SELF_PREFIXES = ("aeos/",)
 """In the policy repository itself the gate's own source is control plane too:
 without this, a pull request could rewrite the code that governs every other
@@ -832,6 +835,9 @@ class Report:
         self.deleted = 0
         self.elapsed = 0.0
         self.primary: str | None = None
+        # agent-toolkit #3052: True when a pass rests on the operator's approval of this head (lock 5 or the
+        # derivation machine route). The trusted workflow re-reads that approval before the pass publishes.
+        self.approval_dependent = False
 
     @property
     def passed(self) -> bool:
@@ -863,6 +869,7 @@ def evaluate(
 ) -> Report:
     started = clock()
     report = Report()
+    admission: dict = {}
     # The standing-governor derivation policy is trusted data beside this module.
     # A caller may point at another directory (the tests do); the candidate never can.
     if policy_dir is None:
@@ -892,9 +899,10 @@ def evaluate(
             Finding(code, path, detail)
             for code, path, detail in derivation_policy.evaluate_derivation_policy(
                 candidate_dir, repository, base_sha, head_sha, policy_dir, now=now,
-                evidence_path=evidence_path,
+                evidence_path=evidence_path, admission=admission,
             )
         )
+        report.approval_dependent = report.approval_dependent or bool(admission.get("operator_approval"))
     except derivation_policy.PolicyError as exc:
         report.findings.append(Finding(exc.code, exc.path, exc.detail))
     except Exception as exc:  # noqa: BLE001 - see _abort
@@ -927,11 +935,20 @@ def evaluate(
             author, kind, actor = pull.get("author_login"), pull.get("author_type"), evidence.get("actor")
             identified_operator = (isinstance(author, str) and author in operators and kind == "User"
                                    and isinstance(actor, str) and actor in operators)
+            # #3052 paperwork removal: the machine may carry the mechanics of a judge change only when a pinned
+            # operator approved exactly this head. The decision stays his; the machine never approves.
+            approval = None
             if not identified_operator:
+                approval = (operator_approval.refusal(judge_policy, evidence, repository, head_sha)
+                            if judge_policy is not None else operator_approval.OPERATOR_APPROVAL_UNBOUND)
+            if not identified_operator and approval is None:
+                report.approval_dependent = True
+            if not identified_operator and approval is not None:
                 report.findings.append(Finding(
                     CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, sorted(report.control_plane)[0],
-                    "only a positively identified operator may change the policy that judges machine "
-                    f"principals: author={author!r} ({kind!r}) actor={actor!r}",
+                    "only a positively identified operator, or his approval of this exact machine-authored "
+                    f"head, may change the policy that judges machine principals: author={author!r} "
+                    f"({kind!r}) actor={actor!r}; operator approval: {approval}",
                 ))
     strict = {p.lower() for p in report.control_plane}
 
@@ -1297,6 +1314,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--soft-budget-seconds", type=float, default=DEFAULT_SOFT_BUDGET_SECONDS)
     parser.add_argument("--evidence-file", default=os.environ.get("AEOS_ACTOR_EVIDENCE") or None,
                         help="the trusted workflow's aeos-actor-evidence/v1 file (machine route)")
+    parser.add_argument("--approval-marker-file", default=os.environ.get("AEOS_APPROVAL_MARKER") or None,
+                        help="on a pass, where to record whether it rests on the operator's approval (#3052)")
     args = parser.parse_args(argv)
 
     report = _evaluate_guarded(
@@ -1318,6 +1337,14 @@ def main(argv: list[str] | None = None) -> int:
                 handle.write(text)
         except OSError as exc:  # pragma: no cover - runner filesystem failure
             sys.stdout.write(f"could not write step summary: {exc}\n")
+    if report.passed and args.approval_marker_file:
+        # Like the summary, a CLI-layer record for the trusted workflow; the judge itself writes nothing. A marker
+        # that cannot be written leaves the workflow's recheck treating the pass as approval-dependent.
+        try:
+            with open(args.approval_marker_file, "w", encoding="utf-8") as handle:
+                json.dump({"schema": APPROVAL_MARKER_SCHEMA, "approval_dependent": report.approval_dependent}, handle)
+        except OSError as exc:  # pragma: no cover - runner filesystem failure
+            sys.stdout.write(f"could not write the approval marker: {exc}\n")
     return 0 if report.passed else 1
 
 

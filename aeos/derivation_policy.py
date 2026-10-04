@@ -69,6 +69,7 @@ import tempfile
 import time
 
 import comment_operand
+import operator_approval
 import scoped_grant
 
 DERIVATION_POLICY_DIFF_UNSIGNED = "DERIVATION_POLICY_DIFF_UNSIGNED"
@@ -199,6 +200,7 @@ class Policy:
         "comment_operand",
         "authority_compiler",
         "scoped_grant",
+        "operator_approval",
     )
 
     def __init__(self, document: dict) -> None:
@@ -223,6 +225,9 @@ class Policy:
         self.authority_compiler = route.get("authority_compiler")
         # #3052 Class B: the scoped-machine-grant consumer's binding (``scoped_grant.validate_binding``).
         self.scoped_grant = route.get("scoped_grant")
+        # #3052 paperwork removal: the operator's approval of an exact machine-authored head
+        # (``operator_approval.validate_binding``); absent means the route does not exist.
+        self.operator_approval = route.get("operator_approval")
 
     @property
     def machine_route_enabled(self) -> bool:
@@ -327,7 +332,7 @@ def parse_policy(raw: bytes) -> Policy:
         if route is not None:
             if (not isinstance(route, dict)
                     or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand",
-                                     "authority_compiler", "scoped_grant"}):
+                                     "authority_compiler", "scoped_grant", "operator_approval"}):
                 raise ValueError("machine_route has unknown keys")
             machines = route.get("machine_principals")
             operators = route.get("operator_principals")
@@ -363,6 +368,8 @@ def parse_policy(raw: bytes) -> Policy:
             if "scoped_grant" in route:
                 # #3052 Class B: a grant only narrows the compiler programme, so it binds nothing without one.
                 scoped_grant.validate_binding(route["scoped_grant"], compiler=route.get("authority_compiler"))
+            if "operator_approval" in route:
+                operator_approval.validate_binding(route["operator_approval"])
         return Policy(document)
     except (KeyError, TypeError, ValueError) as exc:
         raise PolicyError(GATE_CONFIG_INVALID, POLICY_FILE, f"policy is invalid: {exc}")
@@ -950,7 +957,8 @@ def _within_envelope(path: str, envelope: list[str], *, exact_only: bool = False
 
 
 def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | None,
-                  repository: str, entries: list[Entry], now: float) -> str | None:
+                  repository: str, entries: list[Entry], now: float, head_sha: str | None = None,
+                  admission: dict | None = None) -> str | None:
     """``None`` when the machine route admits this protected diff; otherwise the ONE typed
     reason it does not. Every conjunct is checked; the first failure names the reason."""
     if not policy.machine_route_enabled:
@@ -992,9 +1000,20 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
             return scoped_grant.SCOPED_GRANT_DISABLED
         if programme_ref_from_body(pr.get("body", "")) != policy.scoped_grant["programme"]:
             return scoped_grant.SCOPED_GRANT_PROGRAMME_MISMATCH
+    # #3052 paperwork removal: the operator's approval of exactly this machine-authored head stands in for a
+    # programme envelope. It binds one commit, so it is never wider than an envelope. A grant-marked pull
+    # request is still judged only by the scoped-grant judge, never by an approval.
+    approval = None
+    if grant_state == scoped_grant.MARKER_ABSENT and policy.operator_approval is not None:
+        approval = operator_approval.refusal(policy, evidence, repository, head_sha or "")
+        if approval is None:
+            if admission is not None:
+                # The pass rests on the approval: the gate job re-reads it before publishing.
+                admission["operator_approval"] = True
+            return None
     ref = programme_ref_from_body(pr.get("body", ""))
     if ref is None:
-        return MACHINE_ROUTE_PROGRAMME_ABSENT
+        return approval or MACHINE_ROUTE_PROGRAMME_ABSENT
     programme = evidence.get("programme")
     if not isinstance(programme, dict) or programme.get("ref") != ref:
         return MACHINE_ROUTE_PROGRAMME_UNAVAILABLE
@@ -1072,6 +1091,7 @@ def evaluate_derivation_policy(
     policy_dir: str,
     now=time.time,
     evidence_path: str | None = None,
+    admission: dict | None = None,
 ) -> list[tuple[str, str, str]]:
     """``(code, path, detail)`` findings for the derivation-policy conjunct.
 
@@ -1106,7 +1126,8 @@ def evaluate_derivation_policy(
     # operator-authored programme authority needs no operator signature (#3752).
     stamp = now()
     evidence, evidence_reason = load_evidence(evidence_path, candidate_dir=candidate_dir)
-    route_reason = machine_route(policy, evidence, evidence_reason, repository, entries, stamp)
+    route_reason = machine_route(policy, evidence, evidence_reason, repository, entries, stamp, head_sha=head_sha,
+                                 admission=admission)
     if route_reason is None:
         return findings
 

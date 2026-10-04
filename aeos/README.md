@@ -18,7 +18,7 @@ pull-request-body semantics, and no waiting.
 | Check | Reason code on failure |
 | --- | --- |
 | Changed control-plane paths satisfy the strict lane below | `WORKFLOW_POLICY_VIOLATION` · `CONTROL_PLANE_PROOF_FAILED` |
-| A control-plane change in this policy repository not authored and run by an identified operator | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
+| A control-plane change in this policy repository neither authored and run by an identified operator nor approved by one on its exact machine-authored head | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | A control-plane **deletion** in this policy repository | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | No high-confidence credential shape in changed text | `SECRET_SHAPE_DETECTED` |
 | No high-confidence credential shape in any revision the range introduces | `SECRET_SHAPE_DETECTED` |
@@ -286,14 +286,76 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   (`MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE`), so `scripts/agent_relay/` can never quietly
   authorise rewriting the ceiling parser; a malformed envelope entry anywhere invalidates the
   block; evidence that resolves inside the candidate tree is malformed.
-- **Only a positively identified operator edits the judge.** In this repository, a control-plane
-  change (`aeos/**`, the workflows) is judged on its content only when the trusted evidence names
-  a pinned operator principal (type User) as PR author and an operator principal as the run's
-  actor; a machine principal, any `[bot]`, or an empty/unreadable author or actor is
-  `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`, whatever else the candidate passes — the App
-  installation may reach this repository, the gate does not let it rewrite the facts it is judged
-  by, and this holds whether or not `machine_route` is configured. (The operator-side complement
-  is scoping the installation to selected repositories.)
+- **Only the operator decides a change to the judge.** In this repository, a control-plane
+  change (`aeos/**`, the workflows) is judged on its content only when the trusted evidence
+  either names a pinned operator principal (type User) as PR author and an operator principal as
+  the run's actor, **or** shows the operator approved exactly this machine-authored head (the
+  operator-approval route below). A machine principal without that approval, any other `[bot]`,
+  or an empty/unreadable author or actor is `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`, whatever
+  else the candidate passes. The App installation may reach this repository; the gate does not
+  let it decide the facts it is judged by. (The operator-side complement is scoping the
+  installation to selected repositories.)
+- **The operator-approval route** (`aeos/operator_approval.py`, agent-toolkit #3052, bound by
+  `machine_route.operator_approval` = `{schema: aeos-operator-approval/v1, activation}`). The
+  machine carries the mechanics: it authors the pull request, triggers the run and authors the
+  head commit. The operator's **Approve** on that exact head is the decision. It admits:
+  - a control-plane change in this repository (lock 5 above); and
+  - a protected Agent Toolkit change on the machine route, in place of a programme envelope.
+  A grant-marked pull request stays with the scoped-grant judge only.
+
+  Each conjunct refuses with its own `OPERATOR_APPROVAL_*` reason:
+  - the event is `pull_request` (a merge-group commit is never something a review names);
+  - PR author, run actor and head-commit author are the pinned machine principal;
+  - the evidence repository is the candidate's;
+  - the evidence head is the evaluated head;
+  - the pull request, read fresh by the trusted workflow before and after the reviews, still has
+    that head and the very body the rest of the gate judges (`OPERATOR_APPROVAL_CONTEXT_CHANGED`
+    otherwise). A re-run replays its original event, so a body edited since then, say to add a
+    grant marker, is never judged as the old one, including an edit that lands mid-read;
+  - the review list was read completely (at most three pages of 100; more is unreadable, never
+    "no review"). The workflow reads reviews only while `activation` is `enabled`, and a failed
+    read records `UNREAD` without costing any other evidence;
+  - the latest decisive review (`APPROVED`, `CHANGES_REQUESTED` or `DISMISSED`, ordered by
+    `submitted_at`, then id) by a pinned operator principal of type User is `APPROVED`, on that
+    head. A later push makes it stale, and a change request or dismissal revokes it. `COMMENTED`
+    and `PENDING` never decide.
+
+  The identity standard is the predecessor's: the same pinned logins. What is bound is one commit,
+  narrower than any envelope. The machine never approves, and GitHub never lets a pull request's
+  author approve it.
+
+  Two pieces keep a verdict current when the decision changes:
+  - **The barrier is the gate job's last step.** The gate records, in a marker its CLI writes on a
+    pass, whether that pass rested on the approval (lock 5, or the derivation machine route). Only
+    an explicit "no" skips the step; a missing or unreadable marker counts as "yes". When the pass
+    rested on it, the step re-reads the approval and the pull request with the same collector just
+    before the pass publishes. If the approval was withdrawn, or the head or description changed,
+    while the run was judging, the run fails with the route's typed reason
+    (`DERIVATION_POLICY_DIFF_UNSIGNED`, or `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` here), whichever
+    run it is and whatever else is in flight. A run whose evidence carries no approval, or whose
+    approval never held, is untouched.
+  - **`.github/workflows/aeos-approval-rerun.yml` re-judges verdicts that had already settled.** On
+    an approval, a change request, a dismissal or a description edit, it re-runs the latest gate run
+    at the head once it has settled, whatever it concluded. It selects the gate by its exact workflow
+    path, which the workflow floor reserves to the organization; a display name proves nothing. Jobs
+    queue per pull request on the job itself. A run it cannot find or re-run within the bound fails
+    the job visibly; absence is never believed. The consumer route exists only for the policy's
+    target repository, which carries the same file (agent-toolkit `.github/workflows/aeos-approval-rerun.yml`,
+    with its CI-portfolio register entry).
+
+  A re-run executes the workflow definition of the run it repeats. Every definition that collects
+  approvals also carries the recheck, both arriving in one change; an older definition collects
+  none, so the route refuses it (`OPERATOR_APPROVAL_REVIEWS_UNREADABLE`).
+
+  Residual, stated: observing and publishing are not atomic. A revocation, edit or push that lands
+  after the run's last read of the reviews and the pull request cannot stop the pass that read
+  publishes, nor an auto-merge that consumes it. That window runs from the last observation to the
+  merge, normally seconds. It is the same window an operator-opened change has today between a
+  green gate and its merge, and the remedy is a revert. Closing it would need merge-time review
+  enforcement on every pull request, a ruleset change outside this design. Residual, as above: a
+  process acting under the operator's own credential could submit an approval, exactly as it
+  could author a pull request today; identity separation (#3752 M4) removes both. Rollback:
+  `activation: disabled` restores the predecessor exactly.
 - **Operational rule.** The run's actor must be the machine principal too, so an operator who
   reopens or un-drafts a machine-route PR flips its verdict to `MACHINE_ROUTE_TRIGGER_NOT_MACHINE`
   until the machine pushes again; that is the correct answer for a push and the price of it for a
@@ -443,9 +505,12 @@ read them before writing one:
 ## Failing the gate
 
 `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` is not a defect: changing what runs on
-merge is an operator-governed act. Split the control-plane change into its own
-pull request for an organization administrator, who merges it under a ruleset
-bypass. Every other code is a defect in the branch — fix it and push.
+merge is the operator's decision. For a change, the machine opens the pull request
+with the decision in plain words at the top, arms auto-merge, and the operator's
+Approve on that head admits it (the finding's detail names the missing
+`OPERATOR_APPROVAL_*` conjunct). A control-plane deletion is still merged by an
+organization administrator under a ruleset bypass. Every other code is a defect in
+the branch: fix it and push.
 
 `GATE_CONFIG_INVALID` likewise needs an operator, and note the shape of it: a
 malformed configuration reds every pull request in the repository, and the
@@ -456,8 +521,8 @@ worth validating before it is merged.
 
 In this repository, a pull request that touches `.github/workflows/**` or `aeos/**`,
 including a change to the gate itself, is judged on its content only when an
-identified operator authors and runs it. Any other author or actor is refused by
-design.
+identified operator authors and runs it, or approves its exact machine-authored
+head. Anything else is refused by design.
 
 ## Tests
 
