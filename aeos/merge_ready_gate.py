@@ -838,6 +838,9 @@ class Report:
         # agent-toolkit #3052: True when a pass rests on the operator's approval of this head (lock 5 or the
         # derivation machine route). The trusted workflow re-reads that approval before the pass publishes.
         self.approval_dependent = False
+        # agent-toolkit #3052: the accepted change a pass rests on (repository and protected-diff digest), or None.
+        # The trusted workflow re-reads it from current policy before the pass publishes.
+        self.accepted_change: dict | None = None
 
     @property
     def passed(self) -> bool:
@@ -903,6 +906,7 @@ def evaluate(
             )
         )
         report.approval_dependent = report.approval_dependent or bool(admission.get("operator_approval"))
+        report.accepted_change = admission.get("accepted_change")
     except derivation_policy.PolicyError as exc:
         report.findings.append(Finding(exc.code, exc.path, exc.detail))
     except Exception as exc:  # noqa: BLE001 - see _abort
@@ -1342,7 +1346,8 @@ def main(argv: list[str] | None = None) -> int:
         # that cannot be written leaves the workflow's recheck treating the pass as approval-dependent.
         try:
             with open(args.approval_marker_file, "w", encoding="utf-8") as handle:
-                json.dump({"schema": APPROVAL_MARKER_SCHEMA, "approval_dependent": report.approval_dependent}, handle)
+                json.dump({"schema": APPROVAL_MARKER_SCHEMA, "approval_dependent": report.approval_dependent,
+                           "accepted_change": report.accepted_change}, handle)
         except OSError as exc:  # pragma: no cover - runner filesystem failure
             sys.stdout.write(f"could not write the approval marker: {exc}\n")
     return 0 if report.passed else 1

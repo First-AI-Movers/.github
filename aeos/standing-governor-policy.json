@@ -168,6 +168,63 @@
     "operator_approval": {
       "schema": "aeos-operator-approval/v1",
       "activation": "enabled"
-    }
+    },
+    "accepted_changes": [
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "d414e9bd2a1a314384fc0094fdf64c287b4a1321cd3291d9be5944a88df2901b",
+        "paths": [
+          "scripts/agent_relay/control_recovery.py",
+          "scripts/agent_relay/standing_ceiling.py"
+        ],
+        "issued_at": "2026-10-04T21:47:09Z",
+        "not_after": "2026-10-11T21:47:09Z",
+        "activation": "enabled",
+        "decision": "The operator's Approve of this change (agent-toolkit #3052): agent-toolkit #6524's exact protected change, the reader of the approved seat-ceiling list and the recovery rail's refusal for a listed programme."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "7ef9c13ec4ce984fe7d6f227ec1efba1709a32a8f0c3711bf33d5e046e1a2e41",
+        "paths": [
+          "scripts/agent_relay/auto_candidates.py",
+          "scripts/agent_relay/cli.py",
+          "scripts/agent_relay/dispatcher.py",
+          "scripts/agent_relay/remote_dispatch_execute.py",
+          "scripts/agent_relay/repair_integrity.py",
+          "scripts/agent_relay/standing_ceiling.py",
+          "scripts/agent_relay/write_lane_execute.py"
+        ],
+        "issued_at": "2026-10-04T21:47:09Z",
+        "not_after": "2026-10-11T21:47:09Z",
+        "activation": "enabled",
+        "decision": "The operator's Approve of this change (agent-toolkit #3052): agent-toolkit #6525's exact protected change, the first plain-prose write family (one bounded test-only repair per Issue version)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "de89e8158b649da3293eeb8f5f13909d2aad85992afebeb66097948527cdfbd6",
+        "paths": [
+          "scripts/agent_relay/machine_identity.py"
+        ],
+        "issued_at": "2026-10-04T21:47:09Z",
+        "not_after": "2026-10-11T21:47:09Z",
+        "activation": "enabled",
+        "decision": "The operator's Approve of this change (agent-toolkit #3052): agent-toolkit #6540's exact protected change, the history-reader and census-publisher machine token profiles."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "20be32beef1705608d6084aec7e545bb65cf820181def9af430e8369e0be0104",
+        "paths": [
+          "scripts/flight_deck/node_resources.py"
+        ],
+        "issued_at": "2026-10-04T21:47:09Z",
+        "not_after": "2026-10-11T21:47:09Z",
+        "activation": "enabled",
+        "decision": "The operator's Approve of this change (agent-toolkit #3052): agent-toolkit #6545's exact protected change, Mission Control's node reader carrying the cells' programme-observations leaf."
+      }
+    ]
   }
 }

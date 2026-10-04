@@ -364,6 +364,7 @@ class MachineRouteTests(unittest.TestCase):
                                                  allowlist_files=["scripts/x.py"], members=["scripts/x.py"])
             document["machine_route"].pop("authority_compiler")
             document["machine_route"].pop("scoped_grant")
+            document["machine_route"].pop("accepted_changes", None)
             Path(policy_dir, dp.POLICY_FILE).write_text(json.dumps(document))
             path = Path(tempfile.mkdtemp(prefix="aeos-evidence-")) / "evidence.json"
             path.write_text(json.dumps(evidence([review(1, commit=head)], head=head)))
@@ -392,6 +393,7 @@ class MachineRouteTests(unittest.TestCase):
                                                  allowlist_files=["scripts/x.py"], members=["scripts/x.py"])
             document["machine_route"].pop("authority_compiler")
             document["machine_route"].pop("scoped_grant")
+            document["machine_route"].pop("accepted_changes", None)
             Path(policy_dir, dp.POLICY_FILE).write_text(json.dumps(document))
             for rows, passed in (([review(1, commit=head)], True), ([], False)):
                 with self.subTest(passed=passed):
@@ -470,7 +472,8 @@ class JudgeChangeTests(unittest.TestCase):
                 self.assertEqual(code, 0 if passed else 1)
                 if passed:
                     self.assertEqual(json.loads(marker.read_text()),
-                                     {"schema": gate.APPROVAL_MARKER_SCHEMA, "approval_dependent": True})
+                                     {"schema": gate.APPROVAL_MARKER_SCHEMA, "approval_dependent": True,
+                                      "accepted_change": None})
                 else:
                     self.assertFalse(marker.exists())
 

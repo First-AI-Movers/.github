@@ -309,6 +309,9 @@ class DerivationPolicyTestCase(unittest.TestCase):
         findings = self.evaluate(head)
         self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_MANIFEST_INCOMPLETE])
         self.assertIn("deleted:scripts/agent_relay/validate.py", findings[0][2])
+        # #3052: a signature-route finding names why the machine route did not admit, so "no approval yet"
+        # never reads as a mechanical manifest defect.
+        self.assertTrue(findings[0][2].startswith("machine route: "), findings[0][2])
 
     def test_rename_to_an_unlisted_path_cannot_escape(self) -> None:
         self.repo.move("scripts/agent_relay/models.py", "scripts/agent_relay/renamed_models.py")

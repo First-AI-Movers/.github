@@ -88,7 +88,10 @@ jobs:
           repo = os.environ.get("AEOS_REPOSITORY", "")
           event_name = os.environ.get("AEOS_EVENT_NAME", "")
           doc = {"schema": "aeos-actor-evidence/v1", "event": event_name, "repository": repo,
-                 "actor": os.environ.get("AEOS_ACTOR", "")}
+                 "actor": os.environ.get("AEOS_ACTOR", ""),
+                 # agent-toolkit #3052: this definition's job carries "Recheck an accepted protected change before this
+                 # verdict publishes". Without this capability no acceptance admits (aeos/accepted_change.py).
+                 "accepted_change_barrier": "aeos-accepted-change-barrier/v1"}
           def api(path, *args):
               r = subprocess.run(["gh", "api", path, *args], capture_output=True, text=True, timeout=30, check=False)
               return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
@@ -234,6 +237,80 @@ jobs:
           fi
           exit 1
 
+      - name: Recheck an accepted protected change before this verdict publishes
+        # agent-toolkit #3052: a pass that rests on an accepted protected change (aeos/accepted_change.py) re-reads
+        # the pull request's context and then, as the LAST external observation, that entry from the policy
+        # CURRENTLY on main, just before it publishes. An entry revoked, disabled or expired before that read, or a
+        # head or description that moved, never publishes a success. The gate's marker is read first: a pass that
+        # rests on no acceptance is untouched; one that does fails typed when anything it needs is unreadable; and an
+        # unreadable marker fails closed where an acceptance could exist, judged from the event itself (a
+        # machine-authored pull request, or any merge-group event, in the policy's target repository).
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AEOS_REPOSITORY: ${{ github.repository }}
+          AEOS_EVENT_NAME: ${{ github.event_name }}
+          AEOS_EVENT_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+          AEOS_ACTOR_EVIDENCE: ${{ runner.temp }}/aeos-actor-evidence.json
+          AEOS_APPROVAL_MARKER: ${{ runner.temp }}/aeos-approval-marker.json
+        run: |
+          set -uo pipefail
+          python3 - <<'PY'
+          import base64, json, os, subprocess, sys, time
+          sys.path.insert(0, os.path.abspath('policy/aeos'))
+          repo = os.environ.get("AEOS_REPOSITORY", "")
+          def api(path, *args):
+              r = subprocess.run(["gh", "api", path, *args], capture_output=True, text=True, timeout=30, check=False)
+              return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+          def fail(reason):
+              line = "AEOS_MERGE_READY_RESULT: FAIL DERIVATION_POLICY_DIFF_UNSIGNED"
+              detail = f"the accepted protected change this pass rests on no longer holds at publication: {reason}"
+              print(line)
+              print(detail)
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary:
+                  with open(summary, "a", encoding="utf-8") as handle:
+                      handle.write(f"## aeos-merge-ready\n\n{line}\n\n- {detail}\n")
+              sys.exit(1)
+          UNREAD = object()
+          try:
+              with open(os.environ["AEOS_APPROVAL_MARKER"], encoding="utf-8") as handle:
+                  marker = json.load(handle)
+              dependence = marker["accepted_change"] if isinstance(marker, dict) else UNREAD
+          except (OSError, ValueError, KeyError, TypeError):
+              dependence = UNREAD
+          if dependence is None:
+              sys.exit(0)
+          try:
+              import accepted_change
+              import derivation_policy
+              import operator_approval
+              if dependence is UNREAD:
+                  policy = derivation_policy.load_policy('policy/aeos')
+                  machines = {login for login, _kind in policy.machine_principals} if policy is not None else set()
+                  # A merge-group event carries no pull-request author, and an acceptance can admit one: in the
+                  # target repository it always fails closed.
+                  if (policy is None or repo.strip().lower() != policy.target_repository
+                          or (os.environ.get("AEOS_EVENT_NAME", "") != "merge_group"
+                              and os.environ.get("AEOS_EVENT_AUTHOR", "") not in machines)):
+                      sys.exit(0)
+                  fail(accepted_change.ACCEPTED_CHANGE_DEPENDENCE_UNREADABLE)
+              with open(os.environ["AEOS_ACTOR_EVIDENCE"], encoding="utf-8") as handle:
+                  doc = json.load(handle)
+              pr = doc["pull_request"]
+              fresh = operator_approval.collect(api, repo, pr.get("number"), pr.get("head_sha"), pr.get("body"))
+              blob = api("repos/First-AI-Movers/.github/contents/aeos/standing-governor-policy.json?ref=main")
+              current = derivation_policy.parse_policy(base64.b64decode(blob["content"]))
+              reason = accepted_change.withdrawn(current.accepted_changes, dependence, context=fresh.get("context"),
+                                                 now=time.time())
+          except SystemExit:
+              raise
+          except Exception as error:  # noqa: BLE001 - an acceptance that cannot be re-read never publishes a pass
+              reason = f"ACCEPTED_CHANGE_DEPENDENCE_UNREADABLE ({type(error).__name__})"
+          if reason is None:
+              sys.exit(0)
+          fail(reason)
+          PY
       - name: Recheck the operator's approval before this verdict publishes
         # agent-toolkit #3052. A pass that rested on the operator's approval of this head is re-read here,
         # last, with the same collector: if the approval was withdrawn, or the pull request's head or
