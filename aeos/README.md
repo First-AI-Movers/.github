@@ -367,6 +367,46 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   edit an operator-created Issue and would appear as an operator edit; identity separation of
   the execution path is what removes that, which is why it is P0 there.
 
+### Policy-admitted programmes
+
+`machine_route.admitted_programmes` (`aeos/admitted_programme.py`, agent-toolkit #3052) records programmes the operator
+has admitted once, by approving the policy change that adds them. A programme's operational carriers are then
+system-owned: no operator step lands them. Each entry is exactly
+`{schema: aeos-admitted-programme/v1, programme, path_envelope, activation, decision}`.
+
+A machine-authored pull request is admitted under an entry when all of these hold, each refusing with its own
+`ADMITTED_PROGRAMME_*` reason inside `DERIVATION_POLICY_DIFF_UNSIGNED`:
+- the machine route's identity conjuncts pass: PR author, run actor and head-commit author are the machine;
+- the body names exactly that programme and carries no grant marker;
+- the programme Issue is open, authored by an operator principal (type User) and edited only by operators;
+- the pull request, read fresh before and after the reviews, still has the evaluated head and the very description
+  judged (the approval collector's `CURRENT` context). A re-run that replays an older description is refused, and
+  an edit re-runs the gate through `aeos-approval-rerun.yml`;
+- every protected path, both sides of a rename, is listed exactly in `path_envelope`, and is a regular file on
+  every side that exists. A symlink or gitlink at a listed path is never admitted.
+
+The policy refuses to load an envelope that lists:
+- a derivation root;
+- a scoped-grant excluded path;
+- anything under `.github/` or `aeos/`;
+- a path outside the derivation allowlist.
+
+It also refuses any entry when the scoped-grant exclusion list is not configured. So an envelope only ever reaches
+ordinary protected members it names. Programme identity is case-insensitive in its repository part. An entry lasts until revoked. The durable revocation is the policy entry itself: `activation: disabled` or
+removal. Closing the programme Issue also stops every carrier, but only while it stays closed.
+
+Residual, stated: like the programme-envelope and scoped-grant routes, this route reads the programme Issue and the
+description once, when the run collects its evidence; it has no publication-time recheck. That differs from the
+operator-approval route, whose authority is a single revocable review on one head. A change that lands after the
+collection cannot stop that run's pass. A description edit re-runs the gate through `aeos-approval-rerun.yml`, and
+the re-run refuses on the stale context. Closing the Issue in that window is a non-durable revocation in any case.
+
+What the description cannot do is change what lands or under which authority. The authority is the trusted policy
+entry, fixed for the run, plus the Issue's state at collection. The bytes are bounded by the envelope. The
+description only selects the programme. Widening an envelope is a new policy
+change, and therefore a new decision. A grant-marked pull request is never judged here, and a programme the policy
+does not list takes the unchanged programme route.
+
 ### Constrained comment source operand
 
 The optional `machine_route.comment_operand` is one reviewed lowering in the

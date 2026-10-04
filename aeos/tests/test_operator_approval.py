@@ -364,6 +364,7 @@ class MachineRouteTests(unittest.TestCase):
                                                  allowlist_files=["scripts/x.py"], members=["scripts/x.py"])
             document["machine_route"].pop("authority_compiler")
             document["machine_route"].pop("scoped_grant")
+            document["machine_route"].pop("admitted_programmes", None)
             Path(policy_dir, dp.POLICY_FILE).write_text(json.dumps(document))
             path = Path(tempfile.mkdtemp(prefix="aeos-evidence-")) / "evidence.json"
             path.write_text(json.dumps(evidence([review(1, commit=head)], head=head)))
@@ -392,6 +393,7 @@ class MachineRouteTests(unittest.TestCase):
                                                  allowlist_files=["scripts/x.py"], members=["scripts/x.py"])
             document["machine_route"].pop("authority_compiler")
             document["machine_route"].pop("scoped_grant")
+            document["machine_route"].pop("admitted_programmes", None)
             Path(policy_dir, dp.POLICY_FILE).write_text(json.dumps(document))
             for rows, passed in (([review(1, commit=head)], True), ([], False)):
                 with self.subTest(passed=passed):

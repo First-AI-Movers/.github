@@ -68,6 +68,7 @@ import subprocess
 import tempfile
 import time
 
+import admitted_programme
 import comment_operand
 import operator_approval
 import scoped_grant
@@ -201,6 +202,7 @@ class Policy:
         "authority_compiler",
         "scoped_grant",
         "operator_approval",
+        "admitted_programmes",
     )
 
     def __init__(self, document: dict) -> None:
@@ -228,6 +230,8 @@ class Policy:
         # #3052 paperwork removal: the operator's approval of an exact machine-authored head
         # (``operator_approval.validate_binding``); absent means the route does not exist.
         self.operator_approval = route.get("operator_approval")
+        # #3052: programmes the operator admitted in trusted policy (``admitted_programme.validate``).
+        self.admitted_programmes = route.get("admitted_programmes") or []
 
     @property
     def machine_route_enabled(self) -> bool:
@@ -332,7 +336,8 @@ def parse_policy(raw: bytes) -> Policy:
         if route is not None:
             if (not isinstance(route, dict)
                     or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand",
-                                     "authority_compiler", "scoped_grant", "operator_approval"}):
+                                     "authority_compiler", "scoped_grant", "operator_approval",
+                                     "admitted_programmes"}):
                 raise ValueError("machine_route has unknown keys")
             machines = route.get("machine_principals")
             operators = route.get("operator_principals")
@@ -370,6 +375,13 @@ def parse_policy(raw: bytes) -> Policy:
                 scoped_grant.validate_binding(route["scoped_grant"], compiler=route.get("authority_compiler"))
             if "operator_approval" in route:
                 operator_approval.validate_binding(route["operator_approval"])
+            if "admitted_programmes" in route:
+                grant = route.get("scoped_grant")
+                prefixes, files = tuple(policy["allowlist_prefixes"]), frozenset(policy["allowlist_files"])
+                admitted_programme.validate(
+                    route["admitted_programmes"], roots=frozenset(policy["roots"]),
+                    excluded=frozenset(grant["excluded_paths"]) if isinstance(grant, dict) else None,
+                    in_allowlist=lambda path: path in files or path.startswith(prefixes))
         return Policy(document)
     except (KeyError, TypeError, ValueError) as exc:
         raise PolicyError(GATE_CONFIG_INVALID, POLICY_FILE, f"policy is invalid: {exc}")
@@ -1014,6 +1026,12 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
     ref = programme_ref_from_body(pr.get("body", ""))
     if ref is None:
         return approval or MACHINE_ROUTE_PROGRAMME_ABSENT
+    # #3052: a programme the operator admitted in trusted policy. Its machine-authored carriers land on the
+    # entry's exact envelope with no further operator step. A grant-marked pull request is never judged here.
+    admitted = admitted_programme.entry_for(policy.admitted_programmes, ref)
+    if admitted is not None and grant_state == scoped_grant.MARKER_ABSENT:
+        return admitted_programme.refusal(admitted, evidence, ref, operators=policy.operator_principals,
+                                          repository=repository, entries=entries)
     programme = evidence.get("programme")
     if not isinstance(programme, dict) or programme.get("ref") != ref:
         return MACHINE_ROUTE_PROGRAMME_UNAVAILABLE
