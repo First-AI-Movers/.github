@@ -236,6 +236,18 @@
         "not_after": "2026-10-11T21:47:09Z",
         "activation": "enabled",
         "decision": "The operator's Approve of this change (agent-toolkit #3052): the Noah lane's exact protected change B1, a standing seat's resident row relaying the seat's own next pass and blocker (agent-toolkit Issue 4702 clause d)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "af7567c6d1c27d1b09fccb06ab318b628c9818bfe4e704932029ddfc700594c6",
+        "paths": [
+          "scripts/agent_relay/remote_node_session.py"
+        ],
+        "issued_at": "2026-10-05T06:59:30Z",
+        "not_after": "2026-10-12T06:59:30Z",
+        "activation": "enabled",
+        "decision": "The operator's Approve of this change (agent-toolkit #3052): the Noah lane's B1 step 3, the session store's projection allowlist gaining blocker_or_dependency (scripts/agent_relay/remote_node_session.py), agent-toolkit Issue 4702 clause d."
       }
     ]
   }
