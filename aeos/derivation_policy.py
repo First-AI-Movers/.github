@@ -68,6 +68,7 @@ import subprocess
 import tempfile
 import time
 
+import accepted_change
 import comment_operand
 import operator_approval
 import scoped_grant
@@ -201,6 +202,7 @@ class Policy:
         "authority_compiler",
         "scoped_grant",
         "operator_approval",
+        "accepted_changes",
     )
 
     def __init__(self, document: dict) -> None:
@@ -228,6 +230,8 @@ class Policy:
         # #3052 paperwork removal: the operator's approval of an exact machine-authored head
         # (``operator_approval.validate_binding``); absent means the route does not exist.
         self.operator_approval = route.get("operator_approval")
+        # #3052: exact protected changes the operator accepted in trusted policy (``accepted_change.validate``).
+        self.accepted_changes = route.get("accepted_changes") or []
 
     @property
     def machine_route_enabled(self) -> bool:
@@ -332,7 +336,8 @@ def parse_policy(raw: bytes) -> Policy:
         if route is not None:
             if (not isinstance(route, dict)
                     or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand",
-                                     "authority_compiler", "scoped_grant", "operator_approval"}):
+                                     "authority_compiler", "scoped_grant", "operator_approval",
+                                     "accepted_changes"}):
                 raise ValueError("machine_route has unknown keys")
             machines = route.get("machine_principals")
             operators = route.get("operator_principals")
@@ -370,6 +375,11 @@ def parse_policy(raw: bytes) -> Policy:
                 scoped_grant.validate_binding(route["scoped_grant"], compiler=route.get("authority_compiler"))
             if "operator_approval" in route:
                 operator_approval.validate_binding(route["operator_approval"])
+            if "accepted_changes" in route:
+                prefixes, files = tuple(policy["allowlist_prefixes"]), frozenset(policy["allowlist_files"])
+                accepted_change.validate(
+                    route["accepted_changes"], target_repository=document["target_repository"].strip().lower(),
+                    in_allowlist=lambda path: path in files or path.startswith(prefixes))
         return Policy(document)
     except (KeyError, TypeError, ValueError) as exc:
         raise PolicyError(GATE_CONFIG_INVALID, POLICY_FILE, f"policy is invalid: {exc}")
@@ -1011,6 +1021,17 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
                 # The pass rests on the approval: the gate job re-reads it before publishing.
                 admission["operator_approval"] = True
             return None
+    # #3052: an exact protected change the operator accepted in trusted policy. It is matched by the canonical
+    # protected-diff digest, so no description selects it, and a grant-marked pull request is never judged here.
+    if grant_state == scoped_grant.MARKER_ABSENT and policy.accepted_changes:
+        digest = protected_diff_digest(entries)
+        accepted = accepted_change.entry_for(policy.accepted_changes, repository, digest)
+        if accepted is not None:
+            reason = accepted_change.refusal(accepted, evidence, entries=entries, now=now)
+            if reason is None and admission is not None:
+                # The pass rests on the acceptance: the gate job re-reads it from current policy before publishing.
+                admission["accepted_change"] = {"repository": accepted["repository"], "protected_diff_sha256": digest}
+            return reason
     ref = programme_ref_from_body(pr.get("body", ""))
     if ref is None:
         return approval or MACHINE_ROUTE_PROGRAMME_ABSENT
@@ -1150,15 +1171,16 @@ def evaluate_derivation_policy(
     manifest = blobs.get(manifest_sha, b"")
     signature = blobs.get(signature_sha, b"")
     if len(manifest) > MAX_MANIFEST_BYTES:
-        findings.append((DERIVATION_POLICY_MANIFEST_INCOMPLETE, policy.manifest_path, "manifest exceeds the size cap"))
+        findings.append((DERIVATION_POLICY_MANIFEST_INCOMPLETE, policy.manifest_path,
+                         f"machine route: {route_reason}; manifest exceeds the size cap"))
         return findings
     if manifest != expected:
         findings.append(
             (
                 DERIVATION_POLICY_MANIFEST_INCOMPLETE,
                 policy.manifest_path,
-                "manifest bytes are not the canonical representation of the protected "
-                f"diff from {base[:12]}: expected entries "
+                f"machine route: {route_reason}; manifest bytes are not the canonical representation of the "
+                f"protected diff from {base[:12]}: expected entries "
                 + ", ".join(f"{e.status}:{e.path}" for e in entries),
             )
         )

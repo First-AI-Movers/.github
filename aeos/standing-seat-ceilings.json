@@ -1,0 +1,104 @@
+{
+  "schema": "aeos-standing-seat-ceilings/v1",
+  "ceilings": [
+    {
+      "schema": "standing-authority/v2",
+      "state": "ACTIVE",
+      "repository": "First-AI-Movers/agent-toolkit",
+      "issue": 2894,
+      "programme_id": "noah-governor-2894",
+      "serial": 1,
+      "not_after": null,
+      "posture": "standing-governor-resident",
+      "parent": null,
+      "source_body_sha256": "9b096386c08cb8cb829743e68d12fb4a7304a7460a76ad137344493339c28ee2",
+      "authority": {
+        "repository_read": true,
+        "repository_write": true,
+        "reply_with_evidence": true
+      },
+      "scope": {
+        "allowed": [
+          "repository_read",
+          "repository_write",
+          "reply_with_evidence",
+          "execution_checkout_refresh"
+        ],
+        "forbidden": [
+          "consuming_repositories",
+          "deployment",
+          "external_communication",
+          "identity_or_billing",
+          "infrastructure",
+          "legal_commitment",
+          "merge",
+          "migrations",
+          "public_release",
+          "secrets"
+        ]
+      },
+      "path_envelope": [
+        "scripts/flight_deck_mcp/",
+        "tests/flight_deck_mcp/",
+        "scripts/noah_fleet_source.py",
+        "scripts/noah_bridge_deploy.py",
+        "tests/test_noah_fleet_source.py",
+        "tests/test_noah_fleet_source_redirect.py",
+        "tests/test_noah_bridge_deploy.py",
+        "scripts/ci/test-resource-declarations/durable/",
+        "docs/06-operations/",
+        "docs/specs/"
+      ],
+      "max_active_writers": 1,
+      "max_active_child_prs": 1,
+      "granted_completion_class": null,
+      "execution_mode": "modify",
+      "signature": ""
+    },
+    {
+      "schema": "standing-authority/v2",
+      "state": "ACTIVE",
+      "repository": "First-AI-Movers/agent-toolkit",
+      "issue": 1951,
+      "programme_id": "conductor-1951",
+      "serial": 1,
+      "not_after": null,
+      "posture": "standing-governor-resident",
+      "parent": null,
+      "source_body_sha256": "cfe0fbda9c57a4f502d8dd8fff1d848cf19d7a3012247e107cc4dc98b14973ed",
+      "authority": {
+        "repository_read": true,
+        "repository_write": true,
+        "reply_with_evidence": true
+      },
+      "scope": {
+        "allowed": [
+          "repository_read",
+          "repository_write",
+          "reply_with_evidence",
+          "execution_checkout_refresh"
+        ],
+        "forbidden": [
+          "consuming_repositories",
+          "deployment",
+          "external_communication",
+          "identity_or_billing",
+          "infrastructure",
+          "legal_commitment",
+          "merge",
+          "migrations",
+          "public_release",
+          "secrets"
+        ]
+      },
+      "path_envelope": [
+        "docs/06-operations/"
+      ],
+      "max_active_writers": 1,
+      "max_active_child_prs": 1,
+      "granted_completion_class": null,
+      "execution_mode": "modify",
+      "signature": ""
+    }
+  ]
+}

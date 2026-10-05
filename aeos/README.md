@@ -367,6 +367,77 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   edit an operator-created Issue and would appear as an operator edit; identity separation of
   the execution path is what removes that, which is why it is P0 there.
 
+### Accepted protected changes
+
+A protected file is Python that the trust machinery imports, so a standing delegation over it would let a carrier
+change what its own checks do: a module can rebind another module's validator without touching that validator's
+bytes. A change to one of them is therefore a decision about one exact change, never a class. `machine_route.accepted_changes` (`aeos/accepted_change.py`, agent-toolkit #3052) lets the operator make
+that decision once for a set of such changes, by approving the policy change that lists them, instead of
+approving each pull request. Each entry is exactly
+`{schema: aeos-accepted-change/v1, repository, protected_diff_sha256, paths, issued_at, not_after, activation, decision}`.
+
+An entry names the change, not a pull request: the canonical protected-diff digest the gate already computes (every
+protected path with its status and the SHA-256 of its bytes before and after). The digest carries no base or head
+commit, so a carrier keeps its entry when `main` moves or the carrier is rebuilt with the same protected bytes. Any
+byte that differs is a different change and takes the route an unlisted change takes today.
+
+A machine-authored pull request is admitted under an entry when all of these hold. Each refuses with its own
+`ACCEPTED_CHANGE_*` reason inside `DERIVATION_POLICY_DIFF_UNSIGNED`:
+- the machine route's identity conjuncts pass. The operator-approval route is decided first;
+- the evidence carries the publication-recheck capability (`accepted_change_barrier`, below);
+- the body carries no grant marker. No description selects the entry: the digest does;
+- the digest matches an entry for this repository, and the protected paths, both sides of a rename, are exactly
+  the entry's `paths`;
+- the entry is enabled, and the evaluation instant lies in `[issued_at, not_after)`;
+- the pull request, read fresh before and after the reviews, still has the evaluated head and description (the
+  approval collector's `CURRENT` context);
+- every protected path is a regular file on every side that exists.
+
+The policy refuses to load an entry that:
+- names another repository;
+- lists anything under `.github/` or `aeos/`;
+- lists a path outside the derivation allowlist;
+- lives longer than seven days (`not_after` at most `issued_at` plus 7 days).
+
+Nothing renews an entry. The executor cannot add, widen or renew one: each is a change here, which only the operator
+decides. The durable revocation is the entry itself: `activation: disabled` or removal.
+
+A pass that rests on an entry records it in the gate's marker (`accepted_change`). The job's step "Recheck an
+accepted protected change before this verdict publishes" then works in this order:
+1. It reads the marker first. A pass that rests on no acceptance is untouched.
+2. It re-collects the pull request's context.
+3. As its last external observation, it reads that entry from the policy currently on `main`.
+4. It judges the time after that read (`accepted_change.withdrawn`).
+
+An entry revoked, disabled or expired before that final read, or a head or description that moved, fails the run
+instead of publishing a success. So does an acceptance-dependent pass whose evidence cannot be read. A marker that
+cannot be read fails closed for a machine-authored pull request, or any merge-group event, in the policy's target
+repository, the only places an acceptance can exist. That is judged from the event itself, not from the evidence
+file.
+
+The route admits only when the evidence carries the capability `accepted_change_barrier:
+aeos-accepted-change-barrier/v1`. Only a workflow definition whose job carries that step writes it. A re-run of an
+older definition (GitHub re-runs keep the original definition) therefore never admits through an acceptance it would
+not recheck.
+
+Residuals, stated:
+- Between the step's final policy read and the publication of the verdict, normally seconds, a revocation is not
+  observed.
+- A pass that already published is not re-judged by a later revocation or expiry. A consumer's gate runs on its
+  own events, and this repository cannot re-run another repository's checks. Between that publication and the merge,
+  a revocation does not stop the merge. Carriers arm auto-merge, so that window is normally minutes. To stop one
+  inside it, close the pull request or disable its auto-merge. Any push to it re-runs the gate under current policy.
+- An entry admits its exact bytes again if they reappear inside its window, for example after a revert. That is the
+  same change the operator accepted, and the window bounds it.
+- As with every route that judges a candidate's diff from its merge base, two separately accepted changes to one
+  file that merge cleanly together land as their union.
+
+### Machine-route reason on signature-route findings
+
+When the machine route does not admit a protected diff, the gate falls back to the operator's signature over a
+canonical manifest. Every finding of that fallback names `machine route: <reason>`, the manifest findings first
+of all, so a candidate waiting for an approval never reads as a mechanical manifest defect.
+
 ### Constrained comment source operand
 
 The optional `machine_route.comment_operand` is one reviewed lowering in the
