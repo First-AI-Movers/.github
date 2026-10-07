@@ -236,6 +236,25 @@
         "not_after": "2026-10-11T21:47:09Z",
         "activation": "enabled",
         "decision": "The operator's Approve of this change (agent-toolkit #3052): the Noah lane's exact protected change B1, a standing seat's resident row relaying the seat's own next pass and blocker (agent-toolkit Issue 4702 clause d)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "44ce594d32c5196d256f9e0d2b3db1cfc4f79bef930e7eaf2dd8f279ef5102d4",
+        "paths": [
+          "scripts/agent_relay/approval_provenance.py",
+          "scripts/agent_relay/auto_candidates.py",
+          "scripts/agent_relay/auto_execute_queue.py",
+          "scripts/agent_relay/cli.py",
+          "scripts/agent_relay/dispatcher.py",
+          "scripts/agent_relay/machine_child_admission.py",
+          "scripts/agent_relay/receipt_compiler.py",
+          "scripts/agent_relay/write_lane_execute.py"
+        ],
+        "issued_at": "2026-10-07T10:19:40Z",
+        "not_after": "2026-10-14T10:19:40Z",
+        "activation": "enabled",
+        "decision": "The operator's Approve of this change (agent-toolkit #3052): Repair B admits one machine-written child on one unedited chatgpt-codex-connector instruction from its operator-authorized parent, off by default. Digest 44ce594d32c5196d256f9e0d2b3db1cfc4f79bef930e7eaf2dd8f279ef5102d4."
       }
     ]
   }
