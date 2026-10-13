@@ -903,6 +903,184 @@ class DerivationPolicyTestCase(unittest.TestCase):
             self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED], label)
             self.assertIn(token, findings[0][2], label)
 
+    # -- a full resident ceiling has no calendar end (agent-toolkit#6364 5977590767) ------------
+    PASSED = "2000-01-01T00:00:00Z"
+    COMPILER = {"schema": "aeos-programme-authority-compiler/v1", "programme": PROGRAMME_REF,
+                "programme_id": "AT-TEST-M5"}
+
+    def seat_ceiling(self, **overrides) -> dict:
+        """The complete standing-seat block, dated in the past unless a case says otherwise."""
+        block = {
+            "schema": "standing-authority/v2", "state": "ACTIVE", "source_body_sha256": "a" * 64,
+            "authority": {"repository_read": True, "repository_write": True, "create_pull_request": True},
+            "scope": {"allowed": ["repository_write"], "forbidden": ["deployment", "secrets"]},
+            "parent": None, "repository": TARGET, "issue": 3732, "programme_id": "example-seat-3732",
+            "serial": 2, "not_after": self.PASSED, "posture": dp.RESIDENT_POSTURE,
+            "path_envelope": ["scripts/agent_relay/", "tests/agent_relay/"],
+            "max_active_writers": 1, "max_active_child_prs": 1, "granted_completion_class": None,
+            "execution_mode": "modify", "signature": "",
+        }
+        for key in overrides.pop("drop", ()):
+            del block[key]
+        block.update(overrides)
+        return block
+
+    def seat_body(self, **overrides) -> str:
+        return "## Seat\n```standing-authority\n" + json.dumps(self.seat_ceiling(**overrides), sort_keys=True) + "\n```\n"
+
+    def refusal(self, head, doc, label) -> str:
+        """The machine route's one reason inside the single unsigned-diff finding."""
+        findings = self.route(head, doc)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED], label)
+        detail = findings[0][2]
+        self.assertIn("machine route: ", detail, label)
+        return detail.split("machine route: ", 1)[1].split(";", 1)[0]
+
+    def test_a_full_resident_ceiling_is_admitted_however_long_ago_its_date_passed(self) -> None:
+        self.write_machine_policy()
+        head = self.protected_head()
+        for label, not_after in (("long-passed", self.PASSED), ("just-passed", self.days_ahead(-0.001)),
+                                 ("offset-form", "2000-01-01T02:00:00+02:00"), ("null", None),
+                                 ("still-ahead", self.days_ahead(7))):
+            with self.subTest(label):
+                self.assertTrue(dp.is_full_resident_ceiling(self.seat_ceiling(not_after=not_after)), label)
+                self.assertEqual(self.route(head, self.evidence(body=self.seat_body(not_after=not_after))), [], label)
+        # one envelope entry that is an exact file admits that file and nothing beside it
+        self.assertEqual(self.route(head, self.evidence(
+            body=self.seat_body(path_envelope=["scripts/agent_relay/models.py"]))), [])
+        # a declared derivation root is admitted past the date only by its exact entry
+        self.repo.write(Repo.ROOT, "def check(x):\n    return True\n")
+        root_head = self.repo.commit("rewrite the derivation root")
+        self.assertEqual(self.route(root_head, self.evidence(
+            body=self.seat_body(path_envelope=["scripts/agent_relay/models.py", Repo.ROOT]))), [])
+
+    def test_only_a_full_resident_ceiling_loses_its_date(self) -> None:
+        """Every block that is not the complete resident ceiling keeps the end it states."""
+        self.write_machine_policy()
+        head = self.protected_head()
+        six = {"schema": "standing-authority/v2", "state": "ACTIVE", "repository": TARGET, "issue": 3732,
+               "not_after": self.PASSED, "path_envelope": ["scripts/agent_relay/"]}
+        fence = lambda block: "```standing-authority\n" + json.dumps(block) + "\n```\n"  # noqa: E731
+        bounded = {
+            "six-field form": fence(six),
+            "names posture, programme, serial and signature only": fence(
+                dict(six, posture=dp.RESIDENT_POSTURE, programme_id="example-seat-3732", serial=2, signature="")),
+            "names the resident posture only": fence(dict(six, posture=dp.RESIDENT_POSTURE)),
+            "full block, another posture": self.seat_body(posture="standing-governor-rotation"),
+            "full block, posture with a trailing newline": self.seat_body(posture=dp.RESIDENT_POSTURE + "\n"),
+            "full block, one key missing": self.seat_body(drop=("execution_mode",)),
+            "full block, signature missing": self.seat_body(drop=("signature",)),
+            "full block, one unknown key": self.seat_body(note="x"),
+            "full block, serial is a string": self.seat_body(serial="2"),
+            "full block, unknown grant": self.seat_body(authority={"repository_read": True, "anything": True}),
+            "full block, digest is not a digest": self.seat_body(source_body_sha256="none"),
+            "full block, scope has a third list": self.seat_body(
+                scope={"allowed": [], "forbidden": [], "maybe": []}),
+            "full block, duplicate envelope entry": self.seat_body(
+                path_envelope=["scripts/agent_relay/", "scripts/agent_relay/"]),
+            "full block, parent is not a reference": self.seat_body(parent="issue 1951"),
+            "full block, scope token starts with a digit": self.seat_body(
+                scope={"allowed": ["1"], "forbidden": []}),
+            "full block, parent number has a non-ASCII digit": self.seat_body(parent="o/r#1\u0661"),
+            "full block, disjoint_with holds a value no set can hold": self.seat_body(disjoint_with=[{}]),
+            "full block, parent number one digit over the written bound": self.seat_body(
+                parent="o/r#" + "1" * (dp.MAX_CEILING_REF_DIGITS + 1)),
+        }
+        for label, body in bounded.items():
+            with self.subTest(label):
+                self.assertEqual(self.refusal(head, self.evidence(body=body), label),
+                                 dp.MACHINE_ROUTE_AUTHORITY_EXPIRED, label)
+        # and each of them is still admitted while its date is ahead: nothing but the date refused it
+        ahead = self.days_ahead(7)
+        self.assertEqual(self.route(head, self.evidence(body=fence(dict(six, not_after=ahead)))), [])
+        self.assertEqual(self.route(head, self.evidence(
+            body=self.seat_body(posture="standing-governor-rotation", not_after=ahead))), [])
+
+    def test_every_other_conjunct_still_binds_a_full_resident_ceiling_past_its_date(self) -> None:
+        """Losing the date loses nothing else: revocation, provenance, scope and the machine
+        identity each still refuse, each with its own reason."""
+        self.write_machine_policy()
+        head = self.protected_head()
+        body = self.seat_body()
+        self.assertEqual(self.route(head, self.evidence(body=body)), [])  # the control every case departs from
+        cases = {
+            "Issue closed": (self.evidence(body=body, state="closed"), dp.MACHINE_ROUTE_PROGRAMME_NOT_OPEN),
+            "state moved off ACTIVE": (self.evidence(body=self.seat_body(state="PAUSED")),
+                                       dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE),
+            "state REVOKED": (self.evidence(body=self.seat_body(state="REVOKED")),
+                              dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE),
+            "Issue authored by someone else": (self.evidence(body=body, author_login="contributor"),
+                                               dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR),
+            "Issue authored by a bot under the operator login": (
+                self.evidence(body=body, programme={"author_type": "Bot"}), dp.MACHINE_ROUTE_AUTHORITY_NOT_OPERATOR),
+            "Issue edited by the machine": (self.evidence(body=body, editors=[self.OPERATOR, self.MACHINE]),
+                                            dp.MACHINE_ROUTE_AUTHORITY_EDITED_BY_NON_OPERATOR),
+            "edit history unreadable": (self.evidence(body=body, editors=None),
+                                        dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE),
+            "edit history over the bound": (self.evidence(body=body, editors=[self.OPERATOR] * 101),
+                                            dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE),
+            "Issue could not be read": (self.evidence(body=body, unavailable="could not read"),
+                                        dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE),
+            "block names another Issue": (self.evidence(body=self.seat_body(issue=1951)),
+                                          dp.MACHINE_ROUTE_AUTHORITY_REF_MISMATCH),
+            "block names another repository": (self.evidence(body=self.seat_body(repository="First-AI-Movers/other")),
+                                               dp.MACHINE_ROUTE_AUTHORITY_REF_MISMATCH),
+            "path outside the envelope": (self.evidence(body=self.seat_body(path_envelope=["docs/"])),
+                                          dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE),
+            "a person triggered the run": (dict(self.evidence(body=body), actor=self.OPERATOR),
+                                           dp.MACHINE_ROUTE_TRIGGER_NOT_MACHINE),
+            "a person authored the head commit": (self.evidence(body=body, head_commit="contributor"),
+                                                  dp.MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE),
+            "the operator authored the pull request": (
+                self.evidence(body=body, author=self.OPERATOR, author_type="User"), dp.MACHINE_ROUTE_ACTOR_IS_OPERATOR),
+            "another bot authored the pull request": (self.evidence(body=body, author="someone-else[bot]"),
+                                                      dp.MACHINE_ROUTE_ACTOR_NOT_MACHINE),
+            "evidence is for another repository": (self.evidence(body=body, repository="First-AI-Movers/other"),
+                                                   dp.MACHINE_ROUTE_REPOSITORY_MISMATCH),
+            "date is not a date": (self.evidence(body=self.seat_body(not_after="soon")),
+                                   dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID),
+            "date carries no offset": (self.evidence(body=self.seat_body(not_after="2000-01-01T00:00:00")),
+                                       dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID),
+            "date is a number": (self.evidence(body=self.seat_body(not_after=946684800)),
+                                 dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID),
+            "envelope entry escapes the repository": (
+                self.evidence(body=self.seat_body(path_envelope=["scripts/agent_relay/", "../"])),
+                dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID),
+            "two blocks on the Issue": (self.evidence(body=body + body), dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID),
+        }
+        for label, (doc, reason) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(self.refusal(head, doc, label), reason, label)
+        # scope: a declared root past the date still needs its exact entry, never a directory prefix
+        self.repo.write(Repo.ROOT, "def check(x):\n    return True\n")
+        root_head = self.repo.commit("rewrite the derivation root")
+        self.assertEqual(self.refusal(root_head, self.evidence(body=body), "root by prefix"),
+                         dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE)
+
+    def test_the_compiler_programme_keeps_its_date_whatever_its_block(self) -> None:
+        """The compiler programme is judged against the policy allowlist, not an envelope, so a
+        full resident block there ends on its date exactly as before."""
+        head = self.protected_head()
+        identity = "**Policy / Programme ID:** `AT-TEST-M5`\n"
+        self.write_machine_policy()  # no compiler: the same seat block is admitted on its own envelope
+        self.assertEqual(self.route(head, self.evidence(body=identity + self.seat_body())), [])
+        self.write_machine_policy(authority_compiler=self.COMPILER)
+        self.assertEqual(self.refusal(head, self.evidence(body=identity + self.seat_body()), "compiled, passed"),
+                         dp.MACHINE_ROUTE_AUTHORITY_EXPIRED)
+        # ahead or null, the compiler branch is what it was: admitted on the allowlist, envelope unread
+        for label, not_after in (("ahead", self.days_ahead(7)), ("null", None)):
+            with self.subTest(label):
+                self.assertEqual(self.route(head, self.evidence(
+                    body=identity + self.seat_body(not_after=not_after, path_envelope=["docs/"]))), [], label)
+        # a pull request that names a scoped grant never reaches a seat's envelope: with no grant
+        # binding in policy it refuses before any programme is read, full resident block or not
+        self.write_machine_policy()
+        granted = self.evidence(body=self.seat_body(),
+                                pr_body=f"<!-- aeos-programme: {self.PROGRAMME_REF} -->\n"
+                                        f"<!-- scoped-machine-grant: {TARGET}#1@sha256:{'a' * 64} -->")
+        self.assertEqual(dp.scoped_grant.marker_state(granted["pull_request"]["body"]), (TARGET, 1, "a" * 64))
+        self.assertEqual(self.refusal(head, granted, "grant-marked"), dp.scoped_grant.SCOPED_GRANT_UNBOUND)
+
     def test_a_queued_merge_group_run_is_provable_when_the_workflow_resolved_the_queued_pr(self) -> None:
         self.write_machine_policy()
         head = self.protected_head()

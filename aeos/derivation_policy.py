@@ -96,6 +96,12 @@ a longer history is unavailable, not "operator-only by assumption")."""
 # agent-toolkit#3752 5925947456): `not_after: null` is standing intent that holds until the
 # operator closes the Issue, moves `state` off ACTIVE, or supersedes the block; a non-null
 # `not_after` is an operator-chosen end and is honoured. Elapsed time alone revokes nothing.
+# One class is different. The operator decided on 2026-10-04 that standing seats are not renewed
+# by hand and stand until relocated (agent-toolkit#6364 5977590767; agent-toolkit#6478 applied it to
+# that repository's readers and left this judge's dates as a follow-up, which this is). On a FULL
+# RESIDENT CEILING (`is_full_resident_ceiling`) judged against its own path envelope, a date that
+# has passed refuses nothing. It is still parsed and must be well-formed. Every other block keeps
+# its date, and so does the compiler programme.
 # Short-lived CREDENTIALS (signers above, App tokens) keep their own expiry.
 """The machine route (#3752 Slice A). The trusted workflow — never the candidate — writes one
 ``aeos-actor-evidence/v1`` file: the GitHub-authenticated pull-request author (login, type),
@@ -105,7 +111,8 @@ workflow's own token). The networkless gate then admits a protected diff WITHOUT
 SSH signature when, and only when, every one of these holds: the author is a pinned machine
 principal and not a pinned operator principal; the programme Issue is OPEN, authored by a
 pinned operator principal, and carries a ``standing-authority/v2`` block naming this
-repository and that Issue, ``state: ACTIVE`` and a ``not_after`` that is ``null`` (standing until revoked) or still ahead; every protected
+repository and that Issue, ``state: ACTIVE`` and a ``not_after`` that is ``null`` (standing until revoked) or still ahead
+(a full resident ceiling's date ends nothing: see ``is_full_resident_ceiling``); every protected
 changed path lies inside that block's ``path_envelope``. Anything missing, stale or ambiguous
 fails closed to the SSH route, which stays as the break-glass/transition path. Credential
 reachability alone grants nothing: the App token can open the PR, but only the operator's
@@ -966,6 +973,160 @@ def _within_envelope(path: str, envelope: list[str], *, exact_only: bool = False
     return False
 
 
+# -- the full resident ceiling: the one programme block that has no calendar end -------------
+# A standing seat's ceiling is the COMPLETE ``standing-authority/v2`` block: the closed key set
+# below, every axis well-typed, and the resident posture. agent-toolkit reads it with
+# ``scripts/agent_relay/standing_ceiling.py`` (``_check_v2_structure`` + ``is_full_ceiling``) and has
+# treated it as having no calendar end since agent-toolkit#6478. The gate cannot import that
+# code, so the definition is restated here, operation for operation; the names and the order
+# follow the original so the two can be read side by side, and
+# ``tests/full-resident-ceiling-vectors.json`` records the original's patterns, bounds and key sets
+# and the verdict it gave for each case.
+# Two deliberate differences, both keeping the date when the two hosts run the same interpreter
+# settings: for a ``not_after`` UTC cannot express the original raises instead of answering, and
+# this restatement answers "not full"; and a reference's number is bounded here by a written
+# constant in addition to the interpreter's integer-string limit, which is all the original has
+# (``MAX_CEILING_REF_DIGITS`` says when the two hosts can still differ).
+# A block that merely names a posture, a programme and a serial is NOT this class, and neither
+# is the six-field form: each is a bounded authority and keeps the end it states.
+RESIDENT_POSTURE = "standing-governor-resident"
+MAX_CEILING_PATH_ENVELOPE = 64
+MAX_CEILING_SERIAL = 1_000_000
+MAX_CEILING_SIGNATURE_CHARS = 16 * 1024
+MAX_CEILING_ACTIVE = 8
+MAX_CEILING_DISJOINT = 16
+MAX_CEILING_SCOPE_TOKENS = 100
+MAX_CEILING_RELPATH_CHARS = 200
+MAX_CEILING_REF_DIGITS = 4300
+"""The longest number a reference may carry. The original converts the number with ``int`` and so
+stops at the interpreter's integer-string limit, 4300 digits by default. This judge converts it
+too and also refuses any run longer than this written bound, so its own limit is the SMALLER of
+the two: a runner whose interpreter limit is lifted admits nothing beyond the bound, and a runner
+whose limit is lower refuses sooner. The bound cannot follow another host. Where agent-toolkit
+runs with a lower interpreter limit than this gate's runner, a number longer than that limit and
+within this bound is a reference here and not there. No Issue number is longer than ten digits."""
+_CEILING_REQUIRED_KEYS = frozenset({
+    "schema", "state", "source_body_sha256", "authority", "scope", "parent",
+    "repository", "issue", "programme_id", "serial", "not_after", "posture",
+    "path_envelope", "max_active_writers", "max_active_child_prs",
+    "granted_completion_class", "execution_mode", "signature",
+})
+_CEILING_OPTIONAL_KEYS = frozenset({"comments", "disjoint_with"})
+_CEILING_AUTHORITY_KEYS = frozenset({
+    "repository_read", "repository_write", "create_isolated_worktree", "create_branch",
+    "create_pull_request", "same_scope_self_heal", "reply_with_evidence",
+    "resolve_review_threads", "merge", "deployment", "infrastructure", "migrations", "secrets",
+    "identity_or_billing", "consuming_repositories", "create_github_issue_same_repo",
+})
+"""The closed grant vocabulary of a ceiling's ``authority`` map. A block that uses a grant this
+set does not name is not a full ceiling HERE and keeps its date: the gate fails closed until
+the vocabulary is added in a reviewed change to this file."""
+_CEILING_COMPLETION_CLASSES = (None, "L1", "L2", "L3")
+_CEILING_EXECUTION_MODES = ("verify", "modify")
+_CEILING_REF_RE = re.compile(r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#([1-9][0-9]*)\Z")
+_CEILING_PROGRAMME_RE = re.compile(r"^[a-z][a-z0-9-]{2,63}$")
+_CEILING_LABEL_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
+_CEILING_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_CEILING_TOKEN_RE = re.compile(r"[a-z][a-z0-9_-]{0,63}")
+
+
+def _ceiling_ref(value) -> None:
+    """agent-toolkit ``split_ref``: the pattern, then the conversion of the number. The conversion is
+    part of the original and is kept: a digit run Python refuses to convert is not a reference there,
+    so it is not one here."""
+    match = _CEILING_REF_RE.fullmatch(value) if isinstance(value, str) else None
+    if match is None or len(match[2]) > MAX_CEILING_REF_DIGITS:
+        raise ValueError("ceiling ref")
+    int(match[2])
+
+
+def _ceiling_instant(value) -> None:
+    """A string ``datetime.fromisoformat`` reads (``Z`` accepted) that carries an offset and is
+    expressible in UTC."""
+    if not isinstance(value, str):
+        raise ValueError("ceiling instant")
+    stamp = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if stamp.tzinfo is None:
+        raise ValueError("ceiling instant")
+    stamp.astimezone(_dt.timezone.utc)  # an instant UTC cannot express raises OverflowError
+
+
+def _ceiling_relpath(path) -> bool:
+    if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path:
+        return False
+    parts = path.rstrip("/").split("/") if path != "/" else [""]
+    return all(part not in ("", ".", "..") for part in parts) and len(path) <= MAX_CEILING_RELPATH_CHARS
+
+
+def _check_full_ceiling_structure(ceiling) -> None:
+    """The closed, well-typed ``standing-authority/v2`` document a standing seat verifies at its
+    first step. Raises on the first defect; returns nothing. It reads structure only: ``state``,
+    the Issue binding, the envelope and the principals are the machine route's own conjuncts."""
+    if not isinstance(ceiling, dict):
+        raise ValueError
+    keys = set(ceiling)
+    if keys - (_CEILING_REQUIRED_KEYS | _CEILING_OPTIONAL_KEYS) or not _CEILING_REQUIRED_KEYS <= keys:
+        raise ValueError
+    if ceiling["schema"] != PROGRAMME_BLOCK_SCHEMA:
+        raise ValueError
+    if ceiling["parent"] is not None:
+        _ceiling_ref(ceiling["parent"])
+    if not isinstance(ceiling["repository"], str) or type(ceiling["issue"]) is not int:
+        raise ValueError
+    _ceiling_ref(f"{ceiling['repository']}#{ceiling['issue']}")
+    if not isinstance(ceiling["programme_id"], str) or not _CEILING_PROGRAMME_RE.match(ceiling["programme_id"]):
+        raise ValueError
+    if type(ceiling["serial"]) is not int or not 1 <= ceiling["serial"] <= MAX_CEILING_SERIAL:
+        raise ValueError
+    if ceiling["not_after"] is not None:  # null: standing until revoked
+        _ceiling_instant(ceiling["not_after"])
+    if not isinstance(ceiling["posture"], str) or not _CEILING_LABEL_RE.match(ceiling["posture"]):
+        raise ValueError
+    if (not isinstance(ceiling["source_body_sha256"], str)
+            or not _CEILING_HEX64_RE.match(ceiling["source_body_sha256"])):
+        raise ValueError
+    envelope = ceiling["path_envelope"]
+    if (not isinstance(envelope, list) or not 1 <= len(envelope) <= MAX_CEILING_PATH_ENVELOPE
+            or any(not _ceiling_relpath(p) for p in envelope)
+            or len(set(envelope)) != len(envelope)):
+        raise ValueError
+    for key in ("max_active_writers", "max_active_child_prs"):
+        if type(ceiling[key]) is not int or not 0 <= ceiling[key] <= MAX_CEILING_ACTIVE:
+            raise ValueError
+    if ceiling["granted_completion_class"] not in _CEILING_COMPLETION_CLASSES:
+        raise ValueError
+    if ceiling["execution_mode"] not in _CEILING_EXECUTION_MODES:
+        raise ValueError
+    if not isinstance(ceiling["signature"], str) or len(ceiling["signature"]) > MAX_CEILING_SIGNATURE_CHARS:
+        raise ValueError
+    if "disjoint_with" in ceiling:
+        split = ceiling["disjoint_with"]
+        if (not isinstance(split, list) or len(split) > MAX_CEILING_DISJOINT or len(set(split)) != len(split)
+                or any(not isinstance(p, str) or not _CEILING_PROGRAMME_RE.match(p) for p in split)
+                or ceiling["programme_id"] in split):
+            raise ValueError
+    grants, scope = ceiling["authority"], ceiling["scope"]
+    if (not isinstance(grants, dict) or set(grants) - _CEILING_AUTHORITY_KEYS
+            or any(type(v) is not bool for v in grants.values())
+            or not isinstance(scope, dict) or set(scope) != {"allowed", "forbidden"}):
+        raise ValueError
+    for tokens in scope.values():
+        if (not isinstance(tokens, list) or len(tokens) > MAX_CEILING_SCOPE_TOKENS
+                or any(not isinstance(t, str) or not _CEILING_TOKEN_RE.fullmatch(t) for t in tokens)):
+            raise ValueError
+
+
+def is_full_resident_ceiling(block) -> bool:
+    """True only for a structurally valid full ``standing-authority/v2`` ceiling that carries the
+    resident posture. Never raises: anything it cannot read as that class is ``False``, and a
+    block that is not this class keeps its date."""
+    try:
+        _check_full_ceiling_structure(block)
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return False
+    return block["posture"] == RESIDENT_POSTURE
+
+
 def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | None,
                   repository: str, entries: list[Entry], now: float, head_sha: str | None = None,
                   admission: dict | None = None) -> str | None:
@@ -1071,15 +1232,21 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         not_after = _parse_not_after(block["not_after"], "programme")
     except ValueError:
         return MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID
-    if not_after is not None and now >= not_after:
+    compiler = policy.authority_compiler
+    compiled = compiler is not None and compiler["programme"] == ref
+    # A date that has passed ends every programme authority but one. A full resident ceiling
+    # judged against its OWN path envelope has no calendar end: the seat stands until the
+    # operator closes the Issue, moves `state` off ACTIVE or supersedes the block, all checked
+    # above. The compiler programme is judged against the policy allowlist instead of an
+    # envelope, so its date is honoured whatever shape its block has.
+    if not_after is not None and now >= not_after and (compiled or not is_full_resident_ceiling(block)):
         return MACHINE_ROUTE_AUTHORITY_EXPIRED
     # M5 authority compilation is deliberately a policy-selected interpretation
     # of an *existing* operator programme, not another authority document. It
     # produces exactly this candidate's already-computed protected paths and
     # stores no paths, signatures, callbacks, or candidate bytes in policy. The
     # trusted workflow supplies the Issue body; the PR marker only selects it.
-    compiler = policy.authority_compiler
-    if compiler is not None and compiler["programme"] == ref:
+    if compiled:
         if programme_id_from_body(body) != compiler["programme_id"]:
             return MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID
         # #3052 Class B: a grant-marked pull request (already bound to this programme above) is judged ONLY
