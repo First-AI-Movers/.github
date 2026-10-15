@@ -7,11 +7,13 @@
 # than in every repository that adopted it. A caller is unavoidable: GitHub has
 # no required-workflow equivalent for `push`.
 #
-# INFRA_UNAVAILABLE is never evidence about the code. A runner, network or
-# tooling outage produces machine-visible infrastructure health evidence and
-# stops; it never drives a revert and must never read as a bad commit.
+# INFRA_UNAVAILABLE on one commit is never evidence about the code. A runner,
+# network or tooling outage produces machine-visible infrastructure health
+# evidence; it never drives a revert and must never read as a bad commit. The
+# same INFRA reason on this commit and its parent is not an outage: `decide`
+# promotes it to CODE_FAILURE and judges it like one (aeos/main-smoke.md).
 #
-# Circuit breaker (CODE_FAILURE only):
+# Circuit breaker (CODE_FAILURE, and INFRA_UNAVAILABLE so a repeat can be seen):
 #   1. `confirm` reruns the identical smoke on the identical SHA in a fresh runner;
 #   2. `parent-smoke` smokes the parent (`before`) so an inherited failure is not
 #      attributed to an innocent later squash;
@@ -163,11 +165,12 @@ jobs:
           retention-days: 30
 
   confirm:
-    # Rerun ONCE against the identical SHA in a fresh runner. Only a CODE_FAILURE
-    # is ever confirmed; PASS and INFRA_UNAVAILABLE never reach here.
+    # Rerun ONCE against the identical SHA in a fresh runner. A PASS never
+    # reaches here; an INFRA_UNAVAILABLE does, because the breaker promotes the
+    # same reason on the parent and a promoted failure must reproduce too.
     name: main-smoke-confirm
     needs: main-smoke
-    if: always() && github.event_name == 'push' && needs.main-smoke.outputs.outcome == 'CODE_FAILURE'
+    if: always() && github.event_name == 'push' && (needs.main-smoke.outputs.outcome == 'CODE_FAILURE' || needs.main-smoke.outputs.outcome == 'INFRA_UNAVAILABLE')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -225,10 +228,11 @@ jobs:
 
   parent-smoke:
     # Origin check. If the parent fails the same way, this squash inherited the
-    # failure and must not be reverted for it.
+    # failure and must not be reverted for it. On an outage it is also the
+    # previous commit the breaker looks for the same INFRA reason on.
     name: main-smoke-parent
     needs: main-smoke
-    if: always() && github.event_name == 'push' && needs.main-smoke.outputs.outcome == 'CODE_FAILURE'
+    if: always() && github.event_name == 'push' && (needs.main-smoke.outputs.outcome == 'CODE_FAILURE' || needs.main-smoke.outputs.outcome == 'INFRA_UNAVAILABLE')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -289,7 +293,7 @@ jobs:
     # repository's own code is never run in the job that holds the token.
     name: main-smoke-auto-revert
     needs: [main-smoke, confirm, parent-smoke]
-    if: always() && github.event_name == 'push' && needs.main-smoke.outputs.outcome == 'CODE_FAILURE' && needs.confirm.result == 'success' && needs.parent-smoke.result == 'success'
+    if: always() && github.event_name == 'push' && (needs.main-smoke.outputs.outcome == 'CODE_FAILURE' || needs.main-smoke.outputs.outcome == 'INFRA_UNAVAILABLE') && needs.confirm.result == 'success' && needs.parent-smoke.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

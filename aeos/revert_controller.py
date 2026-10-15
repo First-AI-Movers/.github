@@ -14,7 +14,9 @@ decision:
                                             ``before``, the parent does NOT fail the same way, and the
                                             commit touched no protected control-plane path
     PASS_NOTHING_TO_DO                      the first smoke passed
-    INFRA_UNAVAILABLE                       either smoke was INFRA_UNAVAILABLE -- never revert on an outage
+    INFRA_UNAVAILABLE                       either smoke was INFRA_UNAVAILABLE -- never revert on an outage.
+                                            The same INFRA reason on the parent is not an outage: it is
+                                            promoted to CODE_FAILURE first, then judged as below
     NOT_CONFIRMED_FLAKY                     the rerun passed, or failed with a different signature
     ORIGIN_UNPROVEN                         no usable parent evidence -- the commit cannot be shown to be
                                             the origin of the failure
@@ -59,6 +61,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gitobject  # noqa: E402
+import main_smoke  # noqa: E402
 
 SCHEMA_VERSION = "1"
 CHECK_CONTEXT = "aeos-main-smoke"
@@ -228,6 +231,29 @@ def decide(first, second, parent, sha: str, before: str, repo_root) -> dict:
 
     if o1 == "PASS":
         return out("PASS_NOTHING_TO_DO", "the first smoke passed")
+    if o1 == "INFRA_UNAVAILABLE":
+        # Operator decision, 2026-10-15: the same INFRA reason on this commit
+        # and its parent is a code failure, not an outage. The first run and the
+        # parent are promoted together, and the rerun against the parent on the
+        # same terms; all three then meet every conjunct below unchanged, so the
+        # rerun must still reproduce it and the parent, which fails the same way
+        # by definition, still rules out an innocent later commit. Parent
+        # evidence that does not validate promotes nothing.
+        try:
+            _evidence(parent, before, "parent")
+        except ValueError:
+            pass
+        else:
+            promoted = main_smoke.promote_repeated_infra(first, parent)
+            if promoted is not first:
+                base["repeated_infra"] = sorted(
+                    list(pair) for pair in main_smoke.infra_reasons(first))
+                second = main_smoke.promote_repeated_infra(second, parent)
+                parent = main_smoke.promote_repeated_infra(parent, first)
+                first = promoted
+                o1, s1 = first["outcome"], first["signature"]
+                o2, s2 = ((second["outcome"], second.get("signature"))
+                          if second is not None else (None, None))
     if o1 == "INFRA_UNAVAILABLE" or o2 == "INFRA_UNAVAILABLE":
         return out("INFRA_UNAVAILABLE",
                    "a smoke run was INFRA_UNAVAILABLE -- an outage is never code evidence; no revert")

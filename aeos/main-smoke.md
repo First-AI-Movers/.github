@@ -69,20 +69,26 @@ with a typed `AUTOREVERT_AUTH_UNAVAILABLE` rather than failing quietly.
 | `CODE_FAILURE` | a check ran and reported a defect, and nothing was prevented from running | 1 |
 | `INFRA_UNAVAILABLE` | a check could not be executed at all | 3 |
 
-`INFRA_UNAVAILABLE` is **never** evidence about the code. A runner, network or
-tooling outage produces infrastructure health evidence and stops. It never
-drives a revert, and it must never be read as a bad commit. It is still **red**:
-withholding the revert is not the same as hiding the failure.
+`INFRA_UNAVAILABLE` on one commit is **never** evidence about the code. A
+runner, network or tooling outage produces infrastructure health evidence and
+stops. It never drives a revert, and it must never be read as a bad commit. It
+is still **red**: withholding the revert is not the same as hiding the failure.
+The same reason on the next commit is another matter: see
+[A repeated outage](#a-repeated-outage).
 
-A failing command whose output carries an outage signature — `Could not resolve
-host`, `connection reset by peer`, `503` — is reclassified from `CODE_FAILURE`
-to `INFRA_UNAVAILABLE`. That text is repository-controlled, so a repository
-could in principle print it deliberately and never be auto-reverted. This is a
-deliberate bias and the trade is worth stating plainly: the alternative is that
-a transient network failure inside a test, reproducing on the confirm run,
-auto-reverts an innocent commit. A false revert is a destructive autonomous act;
-evasion only returns the repository to where it was before the rail existed, with
-its `main` still visibly red.
+The outage signatures — `Could not resolve host`, `connection reset by peer`,
+`503` — are read on a failing **setup** step only, and there they only add a
+note to the step's detail. A failing declared command is `CODE_FAILURE` whatever
+it prints. Its output is the repository's own text: on 2026-10-14 a pytest
+collection listing printed test ids containing `Could not resolve host` and
+`API rate limit exceeded`, sixteen merges in a row read as an outage, and the
+breaker never ran for about 17 hours. The operator decided this on 2026-10-15.
+
+The old reading guarded against the opposite mistake, a network failure inside a
+test reverting an innocent commit. The parent smoke still guards against it: it
+runs alongside the confirm run, and a failure the parent shares is inherited,
+never reverted. What remains is an outage that breaks the first and confirm runs
+but clears before the parent smoke. That is the trade this rule accepts.
 
 The classification is structural rather than heuristic: each check declares what
 "could not run" means for it versus what "ran and found a defect" means. A run
@@ -161,7 +167,7 @@ steps only. You should not need `env -u` anything.
   fallback: quietly reverting to defaults would change what a rail enforces
   without anyone deciding to.
 - A **`setup`** failure is `INFRA_UNAVAILABLE` — provisioning is not the subject
-  under test. A **`commands`** failure is `CODE_FAILURE`.
+  under test. A **`commands`** failure is `CODE_FAILURE`, whatever it prints.
 - The floor's own `ruff` install is *best effort*: if it fails it leaves a note
   rather than an outcome. `compileall` needs no install, and if `ruff` turns out
   to be on the runner anyway the floor simply runs. Only `floor:ruff` reporting
@@ -180,7 +186,8 @@ steps only. You should not need `env -u` anything.
 
 ## The circuit breaker
 
-On `CODE_FAILURE` only, and never on an outage:
+On `CODE_FAILURE`, and on `INFRA_UNAVAILABLE` so that a repeated outage can be
+seen (an outage on one commit still never reverts anything):
 
 1. **confirm** — rerun the identical smoke on the identical SHA in a fresh runner;
 2. **parent-smoke** — smoke the parent (`before`), so an inherited failure is
@@ -195,7 +202,7 @@ fail the same way, and no protected control-plane path changed.
 | --- | --- |
 | `REVERT` | every conjunct held |
 | `PASS_NOTHING_TO_DO` | the first smoke passed |
-| `INFRA_UNAVAILABLE` | an outage is never code evidence |
+| `INFRA_UNAVAILABLE` | an outage on this commit alone is never code evidence |
 | `NOT_CONFIRMED_FLAKY` | the rerun passed, or failed differently |
 | `ORIGIN_UNPROVEN` | no usable parent evidence |
 | `INHERITED_FAILURE_NOT_ORIGIN` | the parent already fails this way |
@@ -232,6 +239,42 @@ of the same commit — check id, typed reason, and sorted findings where a tool
 emits structured ones. Raw process output never contributes: a timestamp or a
 temporary path in a signature would make every failure look flaky, and the rail
 would never fire.
+
+### A repeated outage
+
+The same `INFRA_UNAVAILABLE` reason on this commit and on its parent is not an
+outage, and the breaker judges it as `CODE_FAILURE` (operator decision,
+2026-10-15). When the first run and the parent run meet all of these, `decide`
+promotes both, and promotes the confirm run against the parent on the same
+terms:
+
+- are `INFRA_UNAVAILABLE` for two different commits, and each proved which commit
+  it measured;
+- ran the same smoke plan;
+- report exactly the same set of INFRA `(check id, reason)` pairs.
+
+Each of those checks becomes `CODE_FAILURE` with the reason
+`REPEATED_INFRA:<reason>`, the signature is rebuilt, and the decision records the
+pairs as `repeated_infra`. Every conjunct above then applies unchanged:
+
+- **The repeat alone never reverts the later commit.** The parent fails the same
+  way by definition, so once the rerun reproduces it and the push is one squash
+  commit, the decision is `INHERITED_FAILURE_NOT_ORIGIN`; an earlier stop, such as
+  a rerun that passed, wins as before. The commit that introduced the condition
+  is the one to fix; its own run saw it once and stayed `INFRA_UNAVAILABLE`.
+- **A repeated outage no longer hides a real failure.** A check that passes on the
+  parent and fails on this commit, beside the same outage on both, is confirmed
+  and reverted like any other failure this commit introduced.
+- **The confirm run must reproduce it.** A rerun that passes, or hits a different
+  outage, promotes nothing into a revert.
+
+The previous commit is measured by the parent smoke, a few minutes after the
+first run, not by that commit's own earlier run, which a caller's `contents: read`
+token cannot read. An outage that lasts through both runs is therefore promoted
+too; it is typed inherited and reverts nothing. The `main-smoke` job's own
+outcome stays `INFRA_UNAVAILABLE`: the promotion is in the decision. On an outage
+the rail now also runs the confirm, parent and decide jobs, which it skipped
+before.
 
 ### Executing a revert
 

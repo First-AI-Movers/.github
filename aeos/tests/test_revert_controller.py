@@ -12,6 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import main_smoke as smoke  # noqa: E402
 import revert_controller as rc  # noqa: E402
 
 GIT_ENV = {
@@ -50,6 +51,22 @@ def failure_check(cid, reason):
 
 def pass_check(cid):
     return {"id": cid, "status": "PASS", "reason": "PASS", "detail": "", "items": []}
+
+
+def infra_check(cid, reason):
+    return {"id": cid, "status": "INFRA_UNAVAILABLE", "reason": reason, "detail": "", "items": []}
+
+
+def measured(sha, checks):
+    """An outcome as the smoke writes it: outcome and signature from its checks."""
+    result = smoke.classify(checks)
+    return {"schema_version": "1", "check_context": rc.CHECK_CONTEXT, "sha": sha,
+            "outcome": result, "source": "floor:python+declared",
+            "signature": smoke.signature(checks) if result == "CODE_FAILURE" else None,
+            "checks": [pass_check("identity"), *checks]}
+
+
+HANG = infra_check("collectability", "TIMEOUT:python3 scripts/ci/smoke_collectability.py")
 
 
 class FakeGh:
@@ -293,6 +310,72 @@ class DecideTestCase(unittest.TestCase):
         first = outcome(sha, "CODE_FAILURE", SIG_A)
         result = rc.decide(first, first, outcome(self.sha, "PASS"), sha, self.sha, self.root)
         self.assertEqual(result["decision"], "REVERT")
+
+    # -- a repeated outage ------------------------------------------------
+    def test_the_same_outage_on_this_commit_and_its_parent_is_promoted_and_inherited(self) -> None:
+        """Promoted to CODE_FAILURE, then judged like one. The parent fails the
+        same way by definition, so the later commit is never reverted for it."""
+        first = measured(self.sha, [HANG])
+        result = self.decide(first=first, second=first, parent=measured(self.before, [HANG]))
+        self.assertEqual(result["decision"], "INHERITED_FAILURE_NOT_ORIGIN")
+        self.assertEqual(result["repeated_infra"], [["collectability", HANG["reason"]]])
+        self.assertIn(["collectability", "REPEATED_INFRA:" + HANG["reason"]],
+                      result["parent_failures"])
+
+    def test_a_repeated_outage_no_longer_masks_a_failure_this_commit_introduced(self) -> None:
+        broken = failure_check("unit", "COMMAND_FAILURE:unit:exit1")
+        first = measured(self.sha, [HANG, broken])
+        self.assertEqual(first["outcome"], "INFRA_UNAVAILABLE")
+        result = self.decide(first=first, second=first,
+                             parent=measured(self.before, [HANG, pass_check("unit")]))
+        self.assertEqual(result["decision"], "REVERT")
+        self.assertEqual(result["introduced_failures"], ["unit"])
+
+    def test_a_repeated_outage_still_needs_the_confirming_rerun(self) -> None:
+        first = measured(self.sha, [HANG])
+        parent = measured(self.before, [HANG])
+        for label, second, decision in [
+            ("the rerun passed", measured(self.sha, [pass_check("collectability")]),
+             "NOT_CONFIRMED_FLAKY"),
+            ("no rerun evidence", False, "NOT_CONFIRMED_FLAKY"),
+            ("the rerun hit another outage",
+             measured(self.sha, [infra_check("collectability", "TOOL_MISSING:pytest")]),
+             "INFRA_UNAVAILABLE"),
+        ]:
+            with self.subTest(label=label):
+                self.assertEqual(
+                    self.decide(first=first, second=second, parent=parent)["decision"], decision)
+
+    def test_a_promoted_repeat_still_needs_one_attributable_squash(self) -> None:
+        """The rerun is promoted with the first run, so a repeat reaches the
+        attribution conjunct, which stops it before the parent is read."""
+        self._write("more.py", "y = 2\n")
+        later = self._commit("a second commit in the same push")
+        first = measured(later, [HANG])
+        result = rc.decide(first, first, measured(self.before, [HANG]), later, self.before, self.root)
+        self.assertEqual(result["decision"], "REVERT_ATTRIBUTION_AMBIGUOUS")
+
+    def test_malformed_findings_promote_nothing_and_still_decide(self) -> None:
+        """Valid JSON a producer never writes must end in a typed decision, never
+        a traceback from sorting findings of mixed types."""
+        odd = [{**failure_check("dup", "X"), "items": ["x"]}, {**failure_check("dup", "X"), "items": [1]}]
+        first = measured(self.sha, [HANG, *odd])
+        result = self.decide(first=first, second=first, parent=measured(self.before, [HANG]))
+        self.assertEqual(result["decision"], "INFRA_UNAVAILABLE")
+
+    def test_an_outage_the_parent_does_not_share_still_never_reverts(self) -> None:
+        first = measured(self.sha, [HANG])
+        for label, parent in [
+            ("the parent passed", measured(self.before, [pass_check("collectability")])),
+            ("the parent failed another way",
+             measured(self.before, [infra_check("collectability", "TOOL_MISSING:pytest")])),
+            ("no parent evidence", False),
+            ("parent evidence for another commit", measured("f" * 40, [HANG])),
+        ]:
+            with self.subTest(label=label):
+                result = self.decide(first=first, second=first, parent=parent)
+                self.assertEqual(result["decision"], "INFRA_UNAVAILABLE")
+                self.assertNotIn("repeated_infra", result)
 
     # -- the happy path ----------------------------------------------------
     def test_a_confirmed_originating_failure_reverts(self) -> None:
