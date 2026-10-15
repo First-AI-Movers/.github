@@ -258,7 +258,8 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
 - **M5 authority compilation.** `machine_route.authority_compiler`, when present, binds one
   existing operator-authored programme by its exact `owner/repo#N` reference and its existing
   `Policy / Programme ID`. It stores neither a path list nor a grant. Once that source has passed
-  the ordinary Issue-author/edit, repository, ACTIVE and expiry checks below, it compiles exactly
+  the ordinary Issue-author/edit, repository, ACTIVE and expiry checks below (its date is always
+  honoured: the standing-seat exception does not reach this route), it compiles exactly
   the protected paths in the candidate's already-recomputed diff. Those paths must remain inside
   the existing derivation-policy allowlist; a candidate marker, candidate prose, bot edit, or a
   path outside that outer boundary does not compile. This is the #3752 zero-crypto route for an
@@ -272,8 +273,8 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   candidate repository; the programme Issue is open, authored by an operator principal (type
   User), and every recorded edit was by an operator principal (an unreadable history is not
   "no edits"); its `standing-authority/v2` block names the same `owner/repo#N`, is `ACTIVE`, and its
-  `not_after` is `null` or still ahead; every protected changed path — both paths of a rename — is inside its
-  `path_envelope`. Absent or malformed evidence and events with no pull request are
+  `not_after` is `null` or still ahead (a full resident ceiling's date ends nothing, see below); every
+  protected changed path — both paths of a rename — is inside its `path_envelope`. Absent or malformed evidence and events with no pull request are
   unprovable.
 - **Revocation, not a calendar, ends programme authority** (operator decision
   agent-toolkit#3752 `5925947456`). `not_after: null` is standing intent: it holds until the
@@ -281,7 +282,42 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   (`MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE`) or supersedes the block. A non-null `not_after` is an
   end the operator chose and is honoured (`MACHINE_ROUTE_AUTHORITY_EXPIRED`); elapsed time alone
   revokes nothing, and there is no ceiling on how far ahead it may lie. Short-lived credentials
-  (signers, App tokens) keep their own expiry. Scope still cannot widen: a declared derivation **root** is
+  (signers, App tokens) keep their own expiry.
+- **A standing seat's ceiling has no calendar end.** The operator decided on 2026-10-04 that
+  standing seats are not renewed by hand and stand until relocated (recorded in agent-toolkit#6364
+  comment `5977590767`). agent-toolkit#6478, which GitHub records as merged on his approving review
+  of its exact head, applied that
+  to agent-toolkit's own readers and left this judge's dates as a separate follow-up. This paragraph
+  is that follow-up; like every change under `aeos/`, it reaches `main` only by the operator's own
+  decision (his own pull request, or his approval of the exact machine-authored head). It
+  supersedes the sentence above for **one class only**: a *full
+  resident ceiling*, which is the complete `standing-authority/v2` block — the
+  closed set of eighteen required keys (`comments` and `disjoint_with` optional), every axis
+  well-typed — whose `posture` is `standing-governor-resident`
+  (`derivation_policy.is_full_resident_ceiling`). On that block's own `path_envelope` a `not_after`
+  that has passed refuses nothing. The date is still parsed, and a malformed one is
+  `MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID`. What ends such a seat is what ends any programme: the
+  Issue closed, `state` off `ACTIVE`, or the block superseded. **Everything else keeps its date:**
+  the six-field form, a block that names a posture without being the complete ceiling, a complete
+  block with any other posture, a comment operand (always six fields), and the M5 compiler
+  programme whatever shape its block has, because that route is bounded by the policy allowlist and
+  not by an envelope. Every other conjunct in the list above binds a full resident ceiling exactly
+  as it binds any block. The definition is a restatement of agent-toolkit's `is_full_ceiling`, which
+  this gate cannot import. `tests/full-resident-ceiling-vectors.json` records two things from that
+  function at the commit the file names: its definition (patterns, bounds, key sets, vocabularies)
+  and, case by case, the verdict it gave. This gate's tests hold the restatement's constants to the
+  first and its verdicts to the second; the file is written to be carried byte for byte into
+  agent-toolkit so the same assertions can hold that side. The vectors pin the cases they name.
+  They do not prove the two readers agree on every input, so a change to either reader is still
+  read against the other, operation by operation. Two differences are deliberate: a `not_after`
+  that UTC cannot express is "not full" here (agent-toolkit raises), and a reference's number is
+  bounded here by a written constant (4300 digits) in addition to the interpreter's integer-string
+  limit, which is all agent-toolkit has. Under the same interpreter settings both keep the date.
+  One case can still go the other way: a host of agent-toolkit that lowers its interpreter limit
+  refuses a number longer than that limit which this gate, within its bound, accepts. No Issue
+  number is longer than ten digits. A key or grant name agent-toolkit adds later makes a block
+  *not* full here until this file learns it, which also keeps the date.
+- **Scope still cannot widen.** A declared derivation **root** is
   admitted only by an exact-path envelope entry, never by a directory prefix
   (`MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE`), so `scripts/agent_relay/` can never quietly
   authorise rewriting the ceiling parser; a malformed envelope entry anywhere invalidates the
