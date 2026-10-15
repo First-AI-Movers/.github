@@ -164,12 +164,44 @@ class SmokeTestCase(unittest.TestCase):
         self.assertEqual(result["outcome"], "INFRA_UNAVAILABLE")
         self.assertTrue(result["checks"][-1]["reason"].startswith("TOOL_MISSING"))
 
-    def test_outage_shaped_output_reclassifies_a_failure_as_infrastructure(self) -> None:
+    def test_outage_phrases_inside_test_ids_are_a_code_failure(self) -> None:
+        """The 2026-10-14 incident: a pytest collection listing printed test ids
+        containing outage phrases, and sixteen merges read as an outage."""
+        listing = ("printf '%s\\n' "
+                   "'tests/test_cycle.py::test_transport_error[Could not resolve host: github.com]' "
+                   "'tests/test_cycle.py::test_transport_error[API rate limit exceeded]' "
+                   "'ERROR tests/test_run_purpose.py'; exit 2")
+        sha = self.declare({"schema_version": "1",
+                            "commands": [{"name": "collectability", "run": listing}]})
+        result = self.run_smoke(sha)
+        self.assertEqual(result["outcome"], "CODE_FAILURE")
+        self.assertEqual(result["checks"][-1]["reason"], "COMMAND_FAILURE:collectability:exit2")
+        self.assertRegex(result["signature"], r"^[0-9a-f]{64}$")
+
+    def test_a_command_that_prints_an_outage_signature_is_still_a_code_failure(self) -> None:
+        """The outage pattern is read on a failing setup step only. A command's
+        output is repository-controlled, and here it hid a real failure."""
         sha = self.declare({"schema_version": "1", "commands": [
             {"name": "unit", "run": "echo 'Could not resolve host: pypi.org' >&2; exit 1"}]})
         result = self.run_smoke(sha)
-        self.assertEqual(result["outcome"], "INFRA_UNAVAILABLE")
-        self.assertEqual(result["checks"][-1]["reason"], "INFRA_OUTPUT:unit")
+        self.assertEqual(result["outcome"], "CODE_FAILURE")
+        self.assertEqual(result["checks"][-1]["reason"], "COMMAND_FAILURE:unit:exit1")
+
+    def test_a_setup_step_names_an_outage_signature_in_its_detail(self) -> None:
+        for label, run, named in [
+            ("outage", "echo 'Could not resolve host: pypi.org' >&2; exit 1", True),
+            ("plain", "echo 'No matching distribution found for nosuchpkg' >&2; exit 1", False),
+        ]:
+            with self.subTest(label=label):
+                sha = self.declare({"schema_version": "1",
+                                    "setup": [{"name": "deps", "run": run}],
+                                    "commands": [{"name": "unit", "run": "true"}]})
+                check = self.run_smoke(sha)["checks"][-1]
+                self.assertEqual(check["status"], "INFRA_UNAVAILABLE")
+                # The reason is the same either way: a signature in the detail
+                # never changes what the rail compares across runs.
+                self.assertEqual(check["reason"], "SETUP_FAILED:deps")
+                self.assertEqual("outage signature" in check["detail"], named, check["detail"])
 
     def test_timeout_makes_no_claim_about_the_code(self) -> None:
         sha = self.declare({"schema_version": "1", "timeout_seconds": 1,
@@ -591,6 +623,83 @@ class SmokeTestCase(unittest.TestCase):
         self.assertIn(result["signature"], text)
 
 
+def _outcome(sha, checks, source="floor:python+declared"):
+    """An outcome document shaped exactly as `run_smoke` writes one."""
+    result = smoke.classify(checks)
+    return {"schema_version": smoke.SCHEMA_VERSION, "check_context": smoke.CHECK_CONTEXT,
+            "sha": sha, "outcome": result, "source": source, "note": "",
+            "signature": smoke.signature(checks) if result == "CODE_FAILURE" else None,
+            "checks": checks, "duration_seconds": 1.0}
+
+
+class RepeatedInfraTestCase(unittest.TestCase):
+    """The same INFRA reason on two consecutive commits is not an outage."""
+
+    SHA = "1" * 40
+    PARENT = "2" * 40
+    IDENTITY = smoke._check("identity", "PASS", "PASS", "HEAD matches")
+    HANG = smoke._check("collectability", "INFRA_UNAVAILABLE",
+                        "TIMEOUT:python3 scripts/ci/smoke_collectability.py", "timed out")
+    UNIT = smoke._check("unit", "PASS", "PASS", "exited 0")
+
+    def test_the_same_infra_reason_on_consecutive_shas_is_promoted(self) -> None:
+        current = _outcome(self.SHA, [self.IDENTITY, self.HANG, self.UNIT])
+        before = json.dumps(current, sort_keys=True)
+        promoted = smoke.promote_repeated_infra(
+            current, _outcome(self.PARENT, [self.IDENTITY, self.HANG, self.UNIT]))
+        self.assertEqual(promoted["outcome"], "CODE_FAILURE")
+        hang = [c for c in promoted["checks"] if c["id"] == "collectability"][0]
+        self.assertEqual(hang["status"], "CODE_FAILURE")
+        self.assertEqual(hang["reason"],
+                         "REPEATED_INFRA:TIMEOUT:python3 scripts/ci/smoke_collectability.py")
+        self.assertEqual(promoted["signature"], smoke.signature(promoted["checks"]))
+        self.assertRegex(promoted["signature"], r"^[0-9a-f]{64}$")
+        self.assertEqual(promoted["promoted_from"], "INFRA_UNAVAILABLE")
+        self.assertEqual(json.dumps(current, sort_keys=True), before, "the input is not mutated")
+
+    def test_anything_short_of_the_same_reason_on_the_previous_commit_stays_an_outage(self) -> None:
+        current = _outcome(self.SHA, [self.IDENTITY, self.HANG])
+        other = smoke._check("collectability", "INFRA_UNAVAILABLE", "TOOL_MISSING:pytest", "")
+        extra = smoke._check("unit", "INFRA_UNAVAILABLE", "TIMEOUT:unit", "")
+        unproven = smoke._check("identity", "INFRA_UNAVAILABLE", "IDENTITY_MISMATCH", "")
+        for label, this, previous in [
+            ("a different reason", current, _outcome(self.PARENT, [self.IDENTITY, other])),
+            ("a reason only the parent had", current,
+             _outcome(self.PARENT, [self.IDENTITY, self.HANG, extra])),
+            ("a reason only this commit has", _outcome(self.SHA, [self.IDENTITY, self.HANG, extra]),
+             _outcome(self.PARENT, [self.IDENTITY, self.HANG])),
+            ("a passing parent", current, _outcome(self.PARENT, [self.IDENTITY, self.UNIT])),
+            ("the same commit again", current, _outcome(self.SHA, [self.IDENTITY, self.HANG])),
+            ("a parent that ran a different plan", current,
+             _outcome(self.PARENT, [self.IDENTITY, self.HANG], source="declared")),
+            ("a parent whose identity is unproven", current, _outcome(self.PARENT, [unproven])),
+            ("no parent at all", current, None),
+            ("a parent whose outcome is not an outage", current,
+             {**_outcome(self.PARENT, [self.IDENTITY, self.HANG]), "outcome": "CODE_FAILURE"}),
+            ("no INFRA reason to repeat",
+             {**_outcome(self.SHA, [self.IDENTITY]), "outcome": "INFRA_UNAVAILABLE"},
+             {**_outcome(self.PARENT, [self.IDENTITY]), "outcome": "INFRA_UNAVAILABLE"}),
+            ("a finding that is not text",
+             _outcome(self.SHA, [self.IDENTITY, self.HANG,
+                                 smoke._check("dup", "CODE_FAILURE", "X", "", items=["x"]),
+                                 {**smoke._check("dup", "CODE_FAILURE", "X", ""), "items": [1]}]),
+             _outcome(self.PARENT, [self.IDENTITY, self.HANG])),
+            ("a check not shaped as the smoke writes one",
+             _outcome(self.SHA, [self.IDENTITY,
+                                 {k: v for k, v in self.HANG.items() if k != "items"}]),
+             _outcome(self.PARENT, [self.IDENTITY, self.HANG])),
+        ]:
+            with self.subTest(label=label):
+                self.assertIs(smoke.promote_repeated_infra(this, previous), this)
+
+    def test_an_unproven_identity_is_never_promoted(self) -> None:
+        """A run that could not prove which commit it measured is not "on a sha"."""
+        unproven = smoke._check("identity", "INFRA_UNAVAILABLE", "IDENTITY_MISMATCH", "")
+        current = _outcome(self.SHA, [unproven])
+        self.assertIs(smoke.promote_repeated_infra(current, _outcome(self.PARENT, [unproven])),
+                      current)
+
+
 class AdoptionContractTestCase(unittest.TestCase):
     """The documented caller and the reusable workflow are one contract.
 
@@ -681,6 +790,15 @@ class AdoptionContractTestCase(unittest.TestCase):
             self.assertTrue(
                 any("chmod -R a-w policy" in (s.get("run") or "") for s in job["steps"]),
                 f"{name} runs repository commands without locking the trusted rail")
+
+    def test_the_breaker_also_runs_on_an_outage_so_a_repeat_can_be_seen(self) -> None:
+        """The breaker promotes the same INFRA reason on a commit and its parent,
+        so the rerun, the parent smoke and the decision must run on an outage too."""
+        jobs = self.workflow["jobs"]
+        for name in ("confirm", "parent-smoke", "auto-revert"):
+            with self.subTest(job=name):
+                self.assertIn("'CODE_FAILURE'", jobs[name]["if"])
+                self.assertIn("'INFRA_UNAVAILABLE'", jobs[name]["if"])
 
     def test_only_the_revert_job_references_a_secret(self) -> None:
         for name, job in self.workflow["jobs"].items():

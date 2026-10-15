@@ -11,6 +11,8 @@ machine-readable outcome:
     INFRA_UNAVAILABLE  a check could not be executed (tool missing, install
                        failure, timeout, checkout identity mismatch) -- the run
                        says NOTHING about the code and must never drive a revert
+                       on its own; the same reason on the previous commit is not
+                       an outage (``promote_repeated_infra``)
 
 The classification is structural, not heuristic: each check declares what "could
 not run" means for it versus what "ran and found a defect" means. A run with ANY
@@ -569,13 +571,17 @@ def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout: int, *, is
         return _check(cid, "PASS", "PASS", f"{name!r} exited 0")
     if is_setup:
         # A setup step is provisioning, not the subject under test. Its failure
-        # is an outage by definition: nothing was measured about the code.
+        # is an outage by definition: nothing was measured about the code. The
+        # outage pattern only says so in the detail, so it never changes the
+        # reason a later run is compared on.
+        outage_note = (" with an outage signature"
+                       if INFRA_OUTPUT_RE.search(f"{proc.stdout}\n{proc.stderr}") else "")
         return _check(cid, "INFRA_UNAVAILABLE", f"SETUP_FAILED:{name}",
-                      f"setup step {name!r} exited {proc.returncode}")
-    combined = f"{proc.stdout}\n{proc.stderr}"
-    if INFRA_OUTPUT_RE.search(combined):
-        return _check(cid, "INFRA_UNAVAILABLE", f"INFRA_OUTPUT:{name}",
-                      f"{name!r} exited {proc.returncode} with an outage signature")
+                      f"setup step {name!r} exited {proc.returncode}{outage_note}")
+    # A declared command's output is never read for an outage. It is the
+    # repository's own text: a pytest collection listing printed test ids
+    # containing "Could not resolve host", and a real failure read as an outage
+    # on sixteen merges in a row (operator decision, 2026-10-15).
     return _check(cid, "CODE_FAILURE", f"COMMAND_FAILURE:{name}:exit{proc.returncode}",
                   f"{name!r} exited {proc.returncode}")
 
@@ -597,6 +603,79 @@ def classify(checks) -> str:
     if "CODE_FAILURE" in statuses:
         return "CODE_FAILURE"
     return "PASS"
+
+
+REPEATED_INFRA_PREFIX = "REPEATED_INFRA:"
+
+
+def infra_reasons(result) -> frozenset:
+    """The ``(check id, reason)`` pairs an outcome reports as INFRA_UNAVAILABLE."""
+    if not isinstance(result, dict):
+        return frozenset()
+    return frozenset(
+        (str(c.get("id")), str(c.get("reason")))
+        for c in result.get("checks") or []
+        if isinstance(c, dict) and c.get("status") == "INFRA_UNAVAILABLE"
+    )
+
+
+def _measured_checks(result):
+    """The checks of an outcome that proved which commit it measured, or ``None``.
+
+    Evidence is read from files, so every check must have the shape this module
+    writes before any of it is rewritten or signed. ``signature`` sorts the
+    findings, so a finding that is not text could raise instead of deciding.
+    """
+    checks = result.get("checks")
+    if not (isinstance(checks, list) and checks and all(
+            isinstance(c, dict) and isinstance(c.get("items"), list)
+            and all(isinstance(item, str) for item in c["items"])
+            and all(isinstance(c.get(k), str) for k in ("id", "status", "reason", "detail"))
+            for c in checks)):
+        return None
+    if checks[0]["id"] != "identity" or checks[0]["status"] != "PASS":
+        return None
+    return checks
+
+
+def promote_repeated_infra(result, previous):
+    """The same INFRA reason on two consecutive commits is a code failure.
+
+    Operator decision, 2026-10-15: an outage that is still there on the next
+    commit is not an outage. ``result`` is promoted only when it and
+    ``previous`` are both INFRA_UNAVAILABLE outcomes for two different commits,
+    both proved which commit they measured, both ran the same smoke plan, and
+    both report exactly the same non-empty set of INFRA ``(check id, reason)``
+    pairs. Each of those checks then becomes CODE_FAILURE with the reason
+    ``REPEATED_INFRA:<reason>`` and the signature is rebuilt over the result.
+    Anything short of that returns ``result`` itself, unchanged.
+
+    It is pure: it reads two outcome documents and never runs anything. The
+    breaker applies it, so a promoted failure still needs the confirming rerun
+    and the parent comparison before anything is reverted.
+    """
+    if not (isinstance(result, dict) and isinstance(previous, dict)):
+        return result
+    if result.get("outcome") != "INFRA_UNAVAILABLE" or previous.get("outcome") != "INFRA_UNAVAILABLE":
+        return result
+    if result.get("sha") == previous.get("sha") or result.get("source") != previous.get("source"):
+        return result
+    measured = _measured_checks(result)
+    if measured is None or _measured_checks(previous) is None:
+        return result
+    repeated = infra_reasons(result)
+    if not repeated or repeated != infra_reasons(previous):
+        return result
+    checks = []
+    for check in measured:
+        if check["status"] == "INFRA_UNAVAILABLE":
+            check = {**check, "status": "CODE_FAILURE",
+                     "reason": REPEATED_INFRA_PREFIX + check["reason"],
+                     "detail": f"the same reason on the previous commit: {check['detail']}"}
+        checks.append(check)
+    # Every INFRA check is now a CODE_FAILURE, so the outcome is one too.
+    return {**result, "checks": checks, "outcome": classify(checks),
+            "signature": signature(checks), "promoted_from": "INFRA_UNAVAILABLE"}
 
 
 def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None) -> dict:
