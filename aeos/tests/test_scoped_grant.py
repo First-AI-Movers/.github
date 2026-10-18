@@ -975,5 +975,203 @@ class ScopedGrantJudge(unittest.TestCase):
                 load_policy(**change)
 
 
+
+class ServedResidentGrant(unittest.TestCase):
+    """Full resident ceilings are served authority, never activation records.
+
+    All other facts are the deterministic admitted World, not a claim that a live
+    Issue has an owning execution or grant. The block uses the canonical vectors.
+    """
+
+    setUp = ScopedGrantJudge.setUp
+    verdict = ScopedGrantJudge.verdict
+
+    def resident(self, **changes):
+        with open(os.path.join(HERE, 'tests/full-resident-ceiling-vectors.json'), encoding='utf-8') as f:
+            block = json.load(f)['base']
+        block.update(repository=REPO, issue=2894, state='ACTIVE', parent=None,
+                     not_after=stamp(-1), path_envelope=[PATH],
+                     authority={'repository_read': True, 'repository_write': True, 'reply_with_evidence': True},
+                     scope={'allowed': ['repository_read', 'repository_write', 'reply_with_evidence'],
+                            'forbidden': ['deployment', 'infrastructure', 'migrations', 'secrets',
+                                          'identity_or_billing', 'merge', 'public_release',
+                                          'external_communication', 'legal_commitment']},
+                     execution_mode='modify', max_active_writers=1, max_active_child_prs=1,
+                     source_body_sha256=hashlib.sha256(b'Mission\n').hexdigest(), disjoint_with=[])
+        block.update(changes)
+        self.bind_served_body('Mission\n```standing-authority\n' + json.dumps(block) + '\n```\n')
+        return block
+
+    def bind_served_body(self, body):
+        self.world.served['body'] = body
+        generation = sg.current_generation(SERVED, body, 'intent-v1')
+        self.world.record_body = render_record(self.policy, receipt__generation=generation,
+                                               receipt__claim_ref=sg.claim_ref(generation))
+        self.world.record['body'] = self.world.record_body
+        self.world.commit['commit']['message'] = '\n'.join(
+            f'generation={generation}' if line.startswith('generation=') else line
+            for line in self.world.commit['commit']['message'].split('\n'))
+        original = self.world.api
+
+        def api(path, *args):
+            if path == f"repos/{REPO}/git/ref/{sg.claim_ref(generation)[len('refs/'):]}":
+                return {'ref': sg.claim_ref(generation), 'object': {'sha': self.world.claim_sha, 'type': 'commit'}}
+            return original(path, *args)
+        self.world.api = api
+
+    def test_full_resident_serves_its_exact_file_after_historical_date(self):
+        self.resident()
+        self.assertIsNone(self.verdict())
+
+    def test_full_resident_directory_covers_only_its_descendants(self):
+        self.resident(path_envelope=['scripts/flight_deck/'])
+        self.assertIsNone(self.verdict())
+
+    def test_resident_out_of_envelope_refuses(self):
+        self.resident(path_envelope=['scripts/agent_relay_listener/'])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_bounds_whole_grant_not_only_changed_file(self):
+        self.resident()
+        self.world.record_body = render_record(self.policy, block__path_envelope=[PATH, 'scripts/flight_deck/provider_capacity.py'],
+                                               receipt__generation=sg.current_generation(SERVED, self.world.served['body'], 'intent-v1'),
+                                               receipt__claim_ref=sg.claim_ref(sg.current_generation(SERVED, self.world.served['body'], 'intent-v1')))
+        self.world.record['body'] = self.world.record_body
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_write_permission_required(self):
+        self.resident(authority={'repository_read': True, 'repository_write': False})
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_write_must_be_allowed(self):
+        block = self.resident()
+        block['scope']['allowed'].remove('repository_write')
+        self.resident(scope=block['scope'])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_forbidden_write_refuses_even_if_granted(self):
+        block = self.resident()
+        block['scope']['forbidden'].append('repository_writes')
+        self.resident(scope=block['scope'])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_verify_mode_refuses(self):
+        self.resident(execution_mode='verify')
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_zero_writer_capacity_refuses(self):
+        self.resident(max_active_writers=0)
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_zero_child_capacity_refuses(self):
+        self.resident(max_active_child_prs=0)
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_foreign_issue_refuses(self):
+        self.resident(issue=2895)
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_foreign_repository_refuses(self):
+        self.resident(repository='First-AI-Movers/other')
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_inactive_refuses(self):
+        self.resident(state='INACTIVE')
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_malformed_shape_refuses(self):
+        self.resident(unknown=True)
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_malformed_date_refuses(self):
+        self.resident(not_after='not-a-date')
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_stale_prose_refuses(self):
+        self.resident(source_body_sha256='0' * 64)
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_stale_generation_refuses(self):
+        self.resident()
+        self.world.record_body = render_record(self.policy)
+        self.world.record['body'] = self.world.record_body
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_GENERATION_UNBOUND)
+
+    def test_resident_does_not_extend_expired_grant(self):
+        self.resident()
+        self.assertEqual(self.verdict(now=epoch(6 * 24 * 60)), sg.SCOPED_GRANT_EXPIRED)
+
+    def test_resident_nonoperator_edit_refuses(self):
+        self.resident()
+        self.world.served['userContentEdits']['nodes'][0]['editor']['login'] = 'other-user'
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_claim_still_required(self):
+        self.resident()
+        self.world.commit['commit']['verification']['verified'] = False
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_OWNER_UNPROVEN)
+
+    def test_resident_attribution_still_required(self):
+        self.resident()
+        evidence = self.world.evidence()
+        evidence['pull_request']['head_commit_author_login'] = self.world.operator
+        self.assertIsNotNone(dp.machine_route(self.policy, evidence, None, REPO, [entry()], epoch(120)))
+
+    def test_full_resident_is_never_an_activation_record(self):
+        self.resident()
+        self.world.record_body = render_record(self.policy, block__posture='standing-governor-resident')
+        self.world.record['body'] = self.world.record_body
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_RECORD_INVALID)
+
+    def test_resident_without_admission_label_refuses(self):
+        self.resident()
+        self.world.served['labels']['nodes'] = []
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_null_date_is_standing(self):
+        self.resident(not_after=None)
+        self.assertIsNone(self.verdict())
+
+    def test_resident_scope_must_retain_protected_forbiddance(self):
+        block = self.resident()
+        block['scope']['forbidden'].remove('secrets')
+        self.resident(scope=block['scope'])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_scope_contradictions_refuse(self):
+        block = self.resident()
+        block['scope']['allowed'].append('billing')
+        self.resident(scope=block['scope'])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_authority_contradictions_refuse(self):
+        block = self.resident()
+        block['authority']['secrets'] = True
+        self.resident(authority=block['authority'])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_does_not_parse_without_trusted_interpreter(self):
+        self.resident()
+        self.assertEqual(sg.judge(self.policy.scoped_grant, self.policy, self.world.evidence(),
+                                  REPO, [entry()], epoch(120)), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_malformed_envelope_refuses_even_with_valid_member(self):
+        self.resident(path_envelope=[PATH, 'scripts/../aeos/'])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_plural_scope_contradictions_refuse(self):
+        block = self.resident()
+        block['authority']['consuming_repositories'] = True
+        block['scope']['forbidden'].append('consuming_repository')
+        self.resident(authority=block['authority'], scope=block['scope'])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_resident_duplicate_field_refuses(self):
+        self.resident()
+        body = self.world.served['body'].replace('"serial":', '"serial": 1, "serial":', 1)
+        self.bind_served_body(body)
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+
 if __name__ == "__main__":
     unittest.main()

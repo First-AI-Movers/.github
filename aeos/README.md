@@ -403,6 +403,25 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   edit an operator-created Issue and would appear as an operator edit; identity separation of
   the execution path is what removes that, which is why it is P0 there.
 
+### Served resident ceilings in scoped grants
+
+A served Issue's full resident ceiling uses `is_full_resident_ceiling`, the same
+closed structural class described above. It must name the served Issue, be ACTIVE,
+and bind its current prose. Repository write must be granted and allowed, scope
+contradictions must be absent, protected actions must remain forbidden, execution
+must be `modify`, and writer and child-PR capacity must both be positive. Every
+exact file in the activation record must lie inside that resident's own envelope;
+a directory entry covers its descendants only. An admitted read-only resident
+cannot serve a repository-code grant. Admission labels and operator edit history
+still apply.
+
+Only this full resident class survives a historical `not_after`, under the
+existing revocation rule. The six-field served form retains its expiry. Activation
+records still require exactly their six ceiling fields and retain their seven-day
+TTL and expiry; they cannot use the resident interpretation. Current-generation,
+claim ownership and machine attribution checks are unchanged. A no-fence served
+Issue continues through the existing root/parent path independently.
+
 ### Accepted protected changes
 
 A protected file is Python that the trust machinery imports, so a standing delegation over it would let a carrier

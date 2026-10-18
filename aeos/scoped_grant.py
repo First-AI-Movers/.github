@@ -27,9 +27,10 @@ Every premise is a fact GitHub already holds, collected by the trusted workflow
 * **Admission.** The ONE Issue the receipt serves is open and operator-authored, with complete
   operator-only edit history and the admission label present and last applied by the current body's
   origin at or after the last edit. A sub-issue may serve only with an open, operator-authored User
-  parent; an Issue carrying its own ceiling may serve only with one valid, ACTIVE, unexpired
-  ``standing-authority/v2`` block naming itself. An operator-authored note that was never admitted
-  is NOT admitted.
+  parent. A served ceiling must name itself: the short six-field form stays ACTIVE and unexpired;
+  a full resident uses the trusted resident interpreter, its existing write authority and its own
+  envelope. Only the full resident class has no calendar end; activation records keep their TTL.
+  An operator-authored note that was never admitted is NOT admitted.
 * **Ownership.** The receipt's ``activated_by`` is the node named by the live #5731 generation claim
   of the served generation, whose ref still points at the receipt's ``claim_commit``. That commit is
   authored by the machine principal, signed by GitHub, names exactly that node and generation, holds
@@ -392,10 +393,11 @@ def _claim_of(got):
 
 
 # -- admission (the incumbent canonized-root rules) ---------------------------------------------------
-def _admitted(served, ref, policy, now) -> bool:
+def _admitted(served, ref, policy, now, *, paths=(), resident_admits=None) -> bool:
     """Whether the served Issue is admitted at ``now``: a root or a child of an open operator-authored
-    User Issue, optionally carrying one valid ACTIVE, unexpired self-named ``standing-authority/v2``
-    ceiling. Operator-only edit history and body-origin label admission still hold; deleted edits refuse."""
+    User Issue, optionally carrying one self-named ceiling. The short form stays ACTIVE/unexpired;
+    full residents require the trusted write/envelope interpreter. Operator-only edits and body-origin
+    label admission still hold; deleted edits refuse."""
     try:
         node, label = served["node"], served["label"]
         match = REF.fullmatch(ref)
@@ -416,14 +418,20 @@ def _admitted(served, ref, policy, now) -> bool:
         if not isinstance(body, str):
             return False
         if "```standing-authority" in body or _BLOCK.search(body) is not None:
+            if body.count("```standing-authority") != 1:
+                return False
             block = _block_of(body)
-            if (block is None or body.count("```standing-authority") != 1
-                    or block["repository"].lower() != match[1].lower() or block["issue"] != int(match[2])
-                    or block["state"] != "ACTIVE"):
-                return False
-            not_after = _parse_stamp(block["not_after"])
-            if not_after is None or now >= not_after:
-                return False
+            if block is None:
+                # Only the trusted caller's strict resident interpreter can admit the full shape.
+                if resident_admits is None or not resident_admits(body, ref, paths):
+                    return False
+            else:
+                if (block["repository"].lower() != match[1].lower() or block["issue"] != int(match[2])
+                        or block["state"] != "ACTIVE"):
+                    return False
+                not_after = _parse_stamp(block["not_after"])
+                if not_after is None or now >= not_after:
+                    return False
         author = node["author"]
         if author.get("__typename") != "User" or author.get("login") not in operators:
             return False
@@ -639,7 +647,7 @@ def _current(observed, now) -> bool:
         return False
 
 
-def judge(binding, policy, evidence, repository: str, entries, now: float):
+def judge(binding, policy, evidence, repository: str, entries, now: float, *, resident_admits=None):
     """``None`` when the grant the pull request names admits every protected entry; otherwise the ONE
     typed reason it does not. Networkless: it reads only the trusted workflow's evidence. It never raises:
     whatever shape a GitHub reading carries, every route out is one code from the closed vocabulary."""
@@ -691,7 +699,7 @@ def judge(binding, policy, evidence, repository: str, entries, now: float):
             if path is not None and path not in allowed:
                 return PATH_OUTSIDE_ENVELOPE
     served = facts.get("served")
-    if not _admitted(served, receipt["serves"], policy, now):
+    if not _admitted(served, receipt["serves"], policy, now, paths=paths, resident_admits=resident_admits):
         return SCOPED_GRANT_ADMISSION_UNPROVEN
     admitted_at = _admitted_at(served)
     if admitted_at is None or admitted_at > created:
