@@ -137,5 +137,98 @@ class ScopedGrantSurfacesFailClosed(unittest.TestCase):
         self.assertLessEqual(imported, {"__future__", "datetime", "hashlib", "json", "re"})
 
 
+class ServedRootBounds(unittest.TestCase):
+    def setUp(self):
+        from test_scoped_grant import World, load_policy, epoch
+        self.policy = load_policy()
+        self.world = World(self.policy)
+        self.now = epoch(120)
+
+    def admitted(self):
+        from test_scoped_grant import SERVED
+        return sg._admitted({"node": self.world.served,
+                             "label": self.policy.scoped_grant["admission_label"]},
+                            SERVED, self.policy, self.now)
+
+    def test_parent_closed_refuses(self):
+        self.world.served["parent"] = {"number": 12, "state": "CLOSED",
+            "author": {"login": self.world.operator, "__typename": "User"}}
+        self.assertFalse(self.admitted())
+
+    def test_parent_bot_refuses(self):
+        self.world.served["parent"] = {"number": 12, "state": "OPEN",
+            "author": {"login": self.world.operator, "__typename": "Bot"}}
+        self.assertFalse(self.admitted())
+
+    def test_parent_unreadable_refuses(self):
+        for parent in ({"number": 12}, {}, {"number": 12, "state": "OPEN", "author": None}):
+            with self.subTest(parent=parent):
+                self.world.served["parent"] = parent
+                self.assertFalse(self.admitted())
+        del self.world.served["parent"]
+        self.assertFalse(self.admitted())
+
+    def test_parent_nonoperator_refuses(self):
+        self.world.served["parent"] = {"number": 12, "state": "OPEN",
+            "author": {"login": "untrusted-user", "__typename": "User"}}
+        self.assertFalse(self.admitted())
+
+    def test_parent_graphql_error_refuses_collection(self):
+        from test_scoped_grant import SERVED
+        original = self.world.api
+
+        def api(path, *args):
+            if path == "graphql" and "i=" + SERVED.split("#")[1] in args:
+                response = original(path, *args)
+                response["data"]["repository"]["issue"]["parent"] = None
+                response["errors"] = [{"message": "parent unavailable"}]
+                return response
+            return original(path, *args)
+        self.world.api = api
+        facts = self.world.evidence()["scoped_grant"]
+        self.assertIsNone(facts["served"])
+        self.assertFalse(sg._admitted(facts["served"], SERVED, self.policy, self.now))
+
+    def ceiling(self, **changes):
+        from test_scoped_grant import REPO, PATH, stamp
+        block = dict(schema=sg.BLOCK_SCHEMA, state="ACTIVE", repository=REPO, issue=2894,
+                     not_after=stamp(121), path_envelope=[PATH])
+        block.update(changes)
+        self.world.served["body"] = "Mission\n```standing-authority\n" + json.dumps(block) + "\n```\n"
+
+    def test_fence_naming_another_issue_refuses(self):
+        self.ceiling(issue=2895)
+        self.assertFalse(self.admitted())
+        self.ceiling(repository="First-AI-Movers/other")
+        self.assertFalse(self.admitted())
+
+    def test_fence_inactive_refuses(self):
+        self.ceiling(state="INACTIVE")
+        self.assertFalse(self.admitted())
+
+    def test_fence_expired_refuses(self):
+        from test_scoped_grant import stamp
+        for minutes in (119, 120):
+            with self.subTest(minutes=minutes):
+                self.ceiling(not_after=stamp(minutes))
+                self.assertFalse(self.admitted())
+
+    def test_fence_malformed_refuses(self):
+        for body in ("```standing-authority\n{}\n```\n",
+                     "```standing-authority\ninvalid\n```\n",
+                     "```standing-authority/v2\n{}\n```\n",
+                     "```standing-authority\n{}", "```standing-authority"):
+            with self.subTest(body=body):
+                self.world.served["body"] = body
+                self.assertFalse(self.admitted())
+        self.ceiling(schema="standing-authority/v1")
+        self.assertFalse(self.admitted())
+        self.ceiling(not_after="unreadable")
+        self.assertFalse(self.admitted())
+        self.ceiling()
+        self.world.served["body"] *= 2
+        self.assertFalse(self.admitted())
+
+
 if __name__ == "__main__":
     unittest.main()

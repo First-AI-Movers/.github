@@ -24,11 +24,12 @@ Every premise is a fact GitHub already holds, collected by the trusted workflow
   ``standing-authority/v2`` block naming itself, and one activation receipt.
 * **The directive.** The operator's own, unedited comment, identified by id and pinned by the
   SHA-256 of its body in this trusted policy. A stand-in body refuses.
-* **Admission.** The ONE Issue the receipt serves is a canonized root under the same rules the
-  incumbent reader applies (agent-toolkit ``standing_ceiling.CanonizedRootVerifier``): open, no
-  ceiling block of its own, operator-authored, complete operator-only edit history, the admission
-  label present and last applied by the current body's origin at or after the last edit, and no
-  sub-issue parent. An operator-authored note that was never admitted is NOT admitted.
+* **Admission.** The ONE Issue the receipt serves is open and operator-authored, with complete
+  operator-only edit history and the admission label present and last applied by the current body's
+  origin at or after the last edit. A sub-issue may serve only with an open, operator-authored User
+  parent; an Issue carrying its own ceiling may serve only with one valid, ACTIVE, unexpired
+  ``standing-authority/v2`` block naming itself. An operator-authored note that was never admitted
+  is NOT admitted.
 * **Ownership.** The receipt's ``activated_by`` is the node named by the live #5731 generation claim
   of the served generation, whose ref still points at the receipt's ``claim_commit``. That commit is
   authored by the machine principal, signed by GitHub, names exactly that node and generation, holds
@@ -290,7 +291,7 @@ def validate_binding(binding, *, compiler) -> None:
 # -- the trusted workflow's collector ----------------------------------------------------------------
 ISSUE_QUERY = '''query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){
 number repository{nameWithOwner} body state createdAt lastEditedAt
-author{login __typename} editor{login} parent{number}
+author{login __typename} editor{login} parent{number state author{login __typename}}
 labels(first:100){nodes{id name} pageInfo{hasNextPage}}
 userContentEdits(first:100){totalCount pageInfo{hasNextPage} nodes{editedAt deletedAt editor{login __typename}}}
 timelineItems(last:50,itemTypes:[LABELED_EVENT]){pageInfo{hasPreviousPage}
@@ -392,8 +393,9 @@ def _claim_of(got):
 
 # -- admission (the incumbent canonized-root rules) ---------------------------------------------------
 def _admitted(served, ref, policy, now) -> bool:
-    """Whether the served Issue is an admitted canonized root at ``now``. Never looser than agent-toolkit's
-    ``CanonizedRootVerifier``; additionally a deleted edit record or a sub-issue parent refuses."""
+    """Whether the served Issue is admitted at ``now``: a root or a child of an open operator-authored
+    User Issue, optionally carrying one valid ACTIVE, unexpired self-named ``standing-authority/v2``
+    ceiling. Operator-only edit history and body-origin label admission still hold; deleted edits refuse."""
     try:
         node, label = served["node"], served["label"]
         match = REF.fullmatch(ref)
@@ -402,12 +404,26 @@ def _admitted(served, ref, policy, now) -> bool:
         if (node["repository"]["nameWithOwner"].lower() != match[1].lower() or type(node["number"]) is not int
                 or node["number"] != int(match[2])):
             return False
-        if node.get("parent") is not None or node["state"] != "OPEN":
-            return False
-        body = node["body"]
-        if not isinstance(body, str) or "```standing-authority" in body or _BLOCK.search(body) is not None:
+        if node["state"] != "OPEN":
             return False
         operators = policy.operator_principals
+        parent = node["parent"]
+        if parent is not None:
+            if (parent["state"] != "OPEN" or parent["author"].get("__typename") != "User"
+                    or parent["author"].get("login") not in operators):
+                return False
+        body = node["body"]
+        if not isinstance(body, str):
+            return False
+        if "```standing-authority" in body or _BLOCK.search(body) is not None:
+            block = _block_of(body)
+            if (block is None or body.count("```standing-authority") != 1
+                    or block["repository"].lower() != match[1].lower() or block["issue"] != int(match[2])
+                    or block["state"] != "ACTIVE"):
+                return False
+            not_after = _parse_stamp(block["not_after"])
+            if not_after is None or now >= not_after:
+                return False
         author = node["author"]
         if author.get("__typename") != "User" or author.get("login") not in operators:
             return False

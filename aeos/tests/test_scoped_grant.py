@@ -280,6 +280,44 @@ class ScopedGrantJudge(unittest.TestCase):
         self.assertIsNone(self.verdict())
         self.assertNotIn("unavailable", self.world.evidence()["scoped_grant"])
 
+    def test_an_open_operator_parent_is_admitted_and_collected(self):
+        parent = {"number": 12, "state": "OPEN",
+                  "author": {"login": self.world.operator, "__typename": "User"}}
+        self.world.served["parent"] = parent
+        original = self.world.api
+        queries = []
+
+        def api(path, *args):
+            if path == "graphql":
+                queries.extend(a for a in args if a.startswith("query="))
+            return original(path, *args)
+        self.world.api = api
+        self.assertIsNone(self.verdict())
+        self.assertTrue(any("parent{number state author{login __typename}}" in q for q in queries))
+        facts = self.world.evidence()["scoped_grant"]
+        self.assertEqual(facts["served"]["node"]["parent"], parent)
+
+    def test_an_active_self_named_ceiling_is_admitted(self):
+        block = dict(schema=sg.BLOCK_SCHEMA, state="ACTIVE", repository=REPO, issue=2894,
+                     not_after=stamp(121), path_envelope=[PATH])
+        body = "Mission\n```standing-authority\n" + json.dumps(block) + "\n```\n"
+        self.world.served["body"] = body
+        generation = sg.current_generation(SERVED, body, "intent-v1")
+        self.world.record_body = render_record(self.policy, receipt__generation=generation,
+                                               receipt__claim_ref=sg.claim_ref(generation))
+        self.world.record["body"] = self.world.record_body
+        self.world.commit["commit"]["message"] = self.world.commit["commit"]["message"].replace(
+            GENERATION, generation)
+        original = self.world.api
+
+        def api(path, *args):
+            if path == f"repos/{REPO}/git/ref/{sg.claim_ref(generation)[len('refs/'):]}":
+                return {"ref": sg.claim_ref(generation),
+                        "object": {"sha": self.world.claim_sha, "type": "commit"}}
+            return original(path, *args)
+        self.world.api = api
+        self.assertIsNone(self.verdict())
+
     # -- the three HOLD controls (5931392715), each distinct --------------------------------------
     def test_hold_control_1_an_operator_note_that_was_never_admitted_is_not_admission(self):
         label = self.policy.scoped_grant["admission_label"]
