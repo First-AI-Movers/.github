@@ -322,6 +322,14 @@ class DecideTestCase(unittest.TestCase):
         self.assertIn(["collectability", "REPEATED_INFRA:" + HANG["reason"]],
                       result["parent_failures"])
 
+    def test_a_spent_budget_never_reverts_on_its_own(self) -> None:
+        spent = infra_check("tests", "SMOKE_BUDGET_EXHAUSTED")
+        first = measured(self.sha, [spent])
+        both = self.decide(first=first, second=first, parent=measured(self.before, [spent]))
+        self.assertEqual(both["decision"], "INHERITED_FAILURE_NOT_ORIGIN")
+        alone = self.decide(first=first, second=first, parent=measured(self.before, [pass_check("tests")]))
+        self.assertEqual(alone["decision"], "INFRA_UNAVAILABLE")
+
     def test_a_repeated_outage_no_longer_masks_a_failure_this_commit_introduced(self) -> None:
         broken = failure_check("unit", "COMMAND_FAILURE:unit:exit1")
         first = measured(self.sha, [HANG, broken])

@@ -195,6 +195,29 @@ steps only. You should not need `env -u` anything.
   configuration still holds a credential route (an `extraheader` or an
   `includeIf`), it stops the same way as `CHECKOUT_CREDENTIAL_KEPT`, and no
   repository command runs. Exact values only, like `language_floor`.
+- `"budget_minutes"` is the whole smoke's time: an integer from 10 to 280, and
+  20 when it is not declared, which is the bound every smoke had before a
+  repository could declare one. The smoke step is bounded by that number, and
+  the smoke asks what is left of it before every process it starts, a floor
+  check's chunks included, stopping one minute short. The few reads it makes
+  before the budget can be asked (identity, the declaration, the tree, the
+  history checks) are each bounded, and the smallest budget leaves room for
+  all of them. A process that would
+  start with no budget left, or one cut off by the budget rather than by its
+  own `timeout_seconds`, ends the run with a check typed
+  `SMOKE_BUDGET_EXHAUSTED`, an `INFRA_UNAVAILABLE`, and nothing after it runs.
+  So once the smoke step runs, its outcome is written; a failure before it (a
+  checkout, the Python install) leaves no outcome, as it always did, and so
+  does a runner lost outright. `timeout_seconds` still bounds each command, now
+  up to the largest budget (16,800), and the budget left caps it. The job's own
+  ceiling is the platform's 360 minutes, as a backstop only: every other step
+  carries its own bound, and those bounds plus the largest budget fit inside it.
+  An undeclared smoke's worst case is 57 minutes, up from the old 20-minute
+  job, while its normal run is unchanged. A spent budget is never a revert on
+  its own: the same reason on the parent is judged inherited, like any repeated
+  outage. A declared budget is runner time spent on every push, and three
+  times over when a failure is confirmed; declare what the suite measurably
+  needs.
 - The file is **control plane**, on both sides. The merge gate refuses a pull
   request that changes it, and the breaker never auto-reverts a commit that
   touched it — a rail that can revert its own configuration can disable itself.

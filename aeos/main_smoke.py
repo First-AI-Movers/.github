@@ -79,7 +79,22 @@ MAX_COMMANDS = 32
 MAX_ITEMS = 200
 DEFAULT_TIMEOUT_SECONDS = 600
 MIN_TIMEOUT_SECONDS = 1
-MAX_TIMEOUT_SECONDS = 1800
+#: The whole smoke's time, in minutes. The workflow bounds the step that runs
+#: this module by the same number, and this module stops early enough to write
+#: its outcome first: a run that outgrows its budget ends typed
+#: SMOKE_BUDGET_EXHAUSTED, never as a killed job with no outcome. The default is
+#: the bound every smoke had before a repository could declare one.
+DEFAULT_BUDGET_MINUTES = 20
+#: Before the budget can be asked, the smoke reads its own inputs: identity,
+#: the declaration (tree entry, size, blob), the tree listing and, for a full
+#: history, two checks -- at most this many git calls, each bounded at 60 s. The
+#: smallest budget leaves room for all of them inside its deadline.
+PREFLIGHT_GIT_CALLS = 7
+MIN_BUDGET_MINUTES = 10
+MAX_BUDGET_MINUTES = 280
+BUDGET_MARGIN_SECONDS = 60
+#: One command may use the largest budget; the run's own budget still caps it.
+MAX_TIMEOUT_SECONDS = MAX_BUDGET_MINUTES * 60
 SCHEMA_VERSIONS = ("1", 1)
 
 #: How much history the checkout holds. ``shallow`` -- the merged commit alone --
@@ -193,11 +208,12 @@ def command_environment(environ=None) -> dict:
 
 
 class Tools:
-    """Injection seam for tests: process runner and PATH lookup."""
+    """Injection seam for tests: process runner, PATH lookup and clock."""
 
-    def __init__(self, run=None, which=shutil.which):
+    def __init__(self, run=None, which=shutil.which, clock=time.monotonic):
         self.run = run or group_run
         self.which = which
+        self.clock = clock
 
 
 def _check(cid, status, reason, detail, items=()):
@@ -278,6 +294,41 @@ def _run(tools: Tools, argv, cwd, timeout, shell=False):
     return proc, None
 
 
+class Budget:
+    """What is left of the smoke's declared time, asked before every process."""
+
+    def __init__(self, deadline: float, timeout: int, clock) -> None:
+        self.deadline, self.timeout, self.clock = deadline, timeout, clock
+
+    def allow(self):
+        """The time the next process may take, or None once the budget is spent."""
+        remaining = self.deadline - self.clock()
+        return min(self.timeout, remaining) if remaining >= MIN_TIMEOUT_SECONDS else None
+
+    def cut(self, allowed, reason: str) -> bool:
+        """Whether a timeout came from the budget rather than the command's own."""
+        return allowed < self.timeout and reason.startswith("TIMEOUT:")
+
+
+def _budget_spent(cid: str) -> dict:
+    return _check(cid, "INFRA_UNAVAILABLE", "SMOKE_BUDGET_EXHAUSTED",
+                  "the declared budget_minutes ran out here; nothing after it was measured")
+
+
+def _bounded_run(tools: Tools, argv, cwd, timeout, cid: str, shell=False):
+    """``_run`` under a plain timeout or a :class:`Budget`: ``(proc, infra, spent)``,
+    where ``spent`` is the typed check to record once the budget has run out."""
+    if not isinstance(timeout, Budget):
+        return (*_run(tools, argv, cwd, timeout, shell=shell), None)
+    allowed = timeout.allow()
+    if allowed is None:
+        return None, None, _budget_spent(cid)
+    proc, infra = _run(tools, argv, cwd, allowed, shell=shell)
+    if infra and timeout.cut(allowed, infra):
+        return None, None, _budget_spent(cid)
+    return proc, infra, None
+
+
 # ---------- identity ------------------------------------------------------------
 
 def check_identity(repo_root: Path, expected_sha: str, tools: Tools) -> dict:
@@ -322,7 +373,18 @@ def parse_smoke_config(raw: bytes) -> dict:
         )
 
     plan = {"setup": [], "commands": [], "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
-            "language_floor": True, "history": DEFAULT_HISTORY}
+            "language_floor": True, "history": DEFAULT_HISTORY,
+            "budget_minutes": DEFAULT_BUDGET_MINUTES}
+
+    budget = document.get("budget_minutes", DEFAULT_BUDGET_MINUTES)
+    # A boolean is an int to isinstance, and neither True nor False is in range.
+    if not isinstance(budget, int) or not (MIN_BUDGET_MINUTES <= budget <= MAX_BUDGET_MINUTES):
+        raise SmokeConfigError(
+            "SMOKE_CONFIG_INVALID",
+            f"{SMOKE_CONFIG_PATH}: budget_minutes must be an integer between "
+            f"{MIN_BUDGET_MINUTES} and {MAX_BUDGET_MINUTES}",
+        )
+    plan["budget_minutes"] = budget
 
     history = document.get("history", DEFAULT_HISTORY)
     if not isinstance(history, str) or history not in HISTORY_CHOICES:
@@ -412,19 +474,27 @@ def load_smoke_config(repo_root: Path, sha: str):
     return parse_smoke_config(raw)
 
 
-def declared_history(repo_root: Path, sha: str) -> str:
-    """The history the declaration at ``sha`` asks for, read before the checks.
+def declared_checkout(repo_root: Path, sha: str) -> dict:
+    """The history and budget the declaration at ``sha`` asks for, read before the checks.
 
     The workflow asks this from the shallow checkout to decide whether to fetch
-    more. Anything but a readable declaration saying ``full`` answers the
-    default: an absent, unreadable or invalid declaration is the smoke's own
-    finding to report, and the smoke reads it again itself.
+    more and how long the smoke step may run. Anything but a readable
+    declaration answers the defaults: an absent, unreadable or invalid
+    declaration is the smoke's own finding to report, and the smoke reads it
+    again itself.
     """
+    defaults = {"history": DEFAULT_HISTORY, "budget_minutes": DEFAULT_BUDGET_MINUTES}
     try:
         declared = load_smoke_config(Path(repo_root), sha)
     except Exception:  # noqa: BLE001 - the smoke reports it, typed
-        return DEFAULT_HISTORY
-    return declared["history"] if declared else DEFAULT_HISTORY
+        return defaults
+    if not declared:
+        return defaults
+    return {"history": declared["history"], "budget_minutes": declared["budget_minutes"]}
+
+
+def declared_history(repo_root: Path, sha: str) -> str:
+    return declared_checkout(repo_root, sha)["history"]
 
 
 def check_history(repo_root: Path, tools: Tools) -> dict:
@@ -551,6 +621,7 @@ def build_plan(repo_root: Path, sha: str, tools: Tools, declared) -> dict:
         commands += declared["commands"]
         parts.append("declared")
         timeout = declared["timeout_seconds"]
+        budget = declared["budget_minutes"]
     else:
         node = node_default(repo_root, sha, paths)
         if node:
@@ -558,11 +629,13 @@ def build_plan(repo_root: Path, sha: str, tools: Tools, declared) -> dict:
             commands += node["commands"]
             parts.append("derived:node")
         timeout = DEFAULT_TIMEOUT_SECONDS
+        budget = DEFAULT_BUDGET_MINUTES
 
     return {
         "setup": setup,
         "commands": commands,
         "timeout_seconds": timeout,
+        "budget_minutes": budget,
         "python_targets": floor["targets"] if floor else [],
         "source": "+".join(parts) if parts else "none",
     }
@@ -582,7 +655,7 @@ def _chunks(items, size=ARGV_CHUNK):
         yield items[start:start + size]
 
 
-def check_compile(repo_root: Path, tools: Tools, timeout: int, targets=None) -> dict:
+def check_compile(repo_root: Path, tools: Tools, timeout, targets=None) -> dict:
     # Note this runs through `_run`, so it inherits the repository command
     # environment -- without PYTHONDONTWRITEBYTECODE, which would otherwise stop
     # the one check whose entire job is to produce bytecode.
@@ -600,7 +673,9 @@ def check_compile(repo_root: Path, tools: Tools, timeout: int, targets=None) -> 
     items, failed = set(), False
     for batch in _chunks(targets):
         argv = [sys.executable or "python3", "-m", "compileall", "-q", *batch]
-        proc, infra = _run(tools, argv, repo_root, timeout)
+        proc, infra, spent = _bounded_run(tools, argv, repo_root, timeout, FLOOR_COMPILE_ID)
+        if spent:
+            return spent
         if infra:
             return _check(FLOOR_COMPILE_ID, "INFRA_UNAVAILABLE", infra, "compileall could not run")
         if proc.returncode != 0:
@@ -612,7 +687,7 @@ def check_compile(repo_root: Path, tools: Tools, timeout: int, targets=None) -> 
                   f"{len(items) or 'one or more'} file(s) failed to compile", items=sorted(items))
 
 
-def check_ruff(repo_root: Path, tools: Tools, timeout: int, targets=None) -> dict:
+def check_ruff(repo_root: Path, tools: Tools, timeout, targets=None) -> dict:
     if not tools.which("ruff"):
         return _check(FLOOR_RUFF_ID, "INFRA_UNAVAILABLE", "TOOL_MISSING:ruff",
                       "ruff is not installed on the runner")
@@ -623,7 +698,9 @@ def check_ruff(repo_root: Path, tools: Tools, timeout: int, targets=None) -> dic
     for batch in _chunks(targets):
         argv = ["ruff", "check", "--no-cache", "--force-exclude", "--select", RUFF_SELECT,
                 "--output-format", "concise", *batch]
-        proc, infra = _run(tools, argv, repo_root, timeout)
+        proc, infra, spent = _bounded_run(tools, argv, repo_root, timeout, FLOOR_RUFF_ID)
+        if spent:
+            return spent
         if infra:
             return _check(FLOOR_RUFF_ID, "INFRA_UNAVAILABLE", infra, "ruff could not run")
         if proc.returncode == 1:
@@ -663,7 +740,7 @@ def bounded_output(text) -> str:
                      + text[-FAILURE_OUTPUT_TAIL_CHARS:])
 
 
-def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout: int, *, is_setup: bool,
+def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout, *, is_setup: bool,
                  failure_output=None) -> dict:
     """Run one repository-declared command.
 
@@ -678,7 +755,9 @@ def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout: int, *, is
     """
     name = entry["name"]
     cid = f"setup:{name}" if is_setup else name
-    proc, infra = _run(tools, entry["run"], repo_root, timeout, shell=True)
+    proc, infra, spent = _bounded_run(tools, entry["run"], repo_root, timeout, cid, shell=True)
+    if spent:
+        return spent
     if infra:
         return _check(cid, "INFRA_UNAVAILABLE", infra, f"{name!r} could not be executed")
     if proc.returncode == 0:
@@ -796,10 +875,15 @@ def promote_repeated_infra(result, previous):
             "signature": signature(checks), "promoted_from": "INFRA_UNAVAILABLE"}
 
 
+BUDGET_NOTE = "the budget ran out; the remaining steps were not run"
+
+
 def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None, failure_output=None) -> dict:
     repo_root = Path(repo_root)
     tools = tools or Tools()
     started = time.monotonic()
+    clock = getattr(tools, "clock", time.monotonic)
+    opened = clock()
     checks = [check_identity(repo_root, expected_sha, tools)]
     source = "none"
     note = ""
@@ -845,10 +929,17 @@ def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None, failure_
         return _finish(checks, expected_sha, started, source, note)
 
     timeout = plan["timeout_seconds"]
+    # Stop early enough to write the outcome before the workflow's step bound,
+    # which is the same budget: a run that outgrows it ends typed, not killed.
+    budget = Budget(opened + plan["budget_minutes"] * 60 - BUDGET_MARGIN_SECONDS, timeout, clock)
+
     notes = [note] if note else []
     for entry in plan["setup"]:
-        check = run_declared(repo_root, entry, tools, timeout, is_setup=True,
+        check = run_declared(repo_root, entry, tools, budget, is_setup=True,
                              failure_output=failure_output)
+        if check["reason"] == "SMOKE_BUDGET_EXHAUSTED":
+            checks.append(check)
+            return _finish(checks, expected_sha, started, source, BUDGET_NOTE)
         if check["status"] == "PASS":
             checks.append(check)
             continue
@@ -873,10 +964,13 @@ def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None, failure_
     for entry in plan["commands"]:
         builtin = BUILTINS.get(entry.get("run")) if entry.get("builtin") else None
         if builtin is not None:
-            checks.append(builtin(repo_root, tools, timeout, plan.get("python_targets") or []))
+            check = builtin(repo_root, tools, budget, plan.get("python_targets") or [])
         else:
-            checks.append(run_declared(repo_root, entry, tools, timeout, is_setup=False,
-                                       failure_output=failure_output))
+            check = run_declared(repo_root, entry, tools, budget, is_setup=False,
+                                 failure_output=failure_output)
+        checks.append(check)
+        if check["reason"] == "SMOKE_BUDGET_EXHAUSTED":
+            return _finish(checks, expected_sha, started, source, BUDGET_NOTE)
     return _finish(checks, expected_sha, started, source, note)
 
 
@@ -926,11 +1020,13 @@ def main(argv=None) -> int:
     ap.add_argument("--out")
     ap.add_argument("--summary-file")
     ap.add_argument("--declared-history", action="store_true",
-                    help="print history=<shallow|full> as declared at the SHA, and run nothing")
+                    help="print history=<shallow|full> and budget_minutes=<n> as declared at the SHA, "
+                         "and run nothing")
     args = ap.parse_args(argv)
 
     if args.declared_history:
-        sys.stdout.write(f"history={declared_history(args.repo_root, args.expected_sha.strip().lower())}\n")
+        declared = declared_checkout(args.repo_root, args.expected_sha.strip().lower())
+        sys.stdout.write(f"history={declared['history']}\nbudget_minutes={declared['budget_minutes']}\n")
         return 0
 
     failures: list[dict] = []

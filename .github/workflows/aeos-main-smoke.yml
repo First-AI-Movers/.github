@@ -66,7 +66,12 @@ jobs:
   main-smoke:
     name: main-smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A backstop only, at the platform's ceiling: every step below carries its
+    # own bound, and the smoke step is bounded by the budget the repository
+    # declares (budget_minutes, default 20, at most 280), which it stops short
+    # of so that, once the smoke step runs, its outcome is written. The step
+    # bounds plus the largest budget fit inside this ceiling.
+    timeout-minutes: 360
     permissions:
       contents: read
     outputs:
@@ -75,6 +80,7 @@ jobs:
       source: ${{ steps.smoke.outputs.source }}
     steps:
       - name: Check out the exact SHA under test
+        timeout-minutes: 10
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.sha }}
@@ -83,6 +89,7 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Check out the trusted rail
+        timeout-minutes: 5
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: First-AI-Movers/.github
@@ -92,14 +99,17 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Make the trusted rail unwritable
+        timeout-minutes: 2
         # Repository commands run as themselves and can write anywhere the job
         # can, including into `policy/`. Dropping write permission closes the
         # one route by which repository content could become policy code that a
         # later lazy import executes.
         run: chmod -R a-w policy
-      - name: Read the history the repository declares
+      - name: Read the history and budget the repository declares
+        timeout-minutes: 5
         # Trusted code reads the declaration at the SHA from the shallow
-        # checkout; nothing the repository runs has run yet.
+        # checkout; nothing the repository runs has run yet, so no repository
+        # command can have written either output.
         id: history
         env:
           AEOS_SHA: ${{ github.sha }}
@@ -109,6 +119,7 @@ jobs:
           python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_SHA" \
             --declared-history >> "$GITHUB_OUTPUT" || true
       - name: Fetch the full history it declares (no credential is kept)
+        timeout-minutes: 20
         # Unshallows the same checkout with the job's read token, which the
         # action removes again before anything else runs. If the history is
         # still missing, or a credential was left behind, the smoke types it
@@ -125,11 +136,13 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Honour a repository Python pin, if it has one
+        timeout-minutes: 10
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version-file: repo/.python-version
       - name: Smoke
+        timeout-minutes: ${{ fromJSON(steps.history.outputs.budget_minutes || '20') }}
         id: smoke
         env:
           AEOS_SHA: ${{ github.sha }}
@@ -182,6 +195,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           exit "$rc"
       - name: Upload the outcome (per SHA)
+        timeout-minutes: 5
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -199,11 +213,17 @@ jobs:
     needs: main-smoke
     if: always() && github.event_name == 'push' && (needs.main-smoke.outputs.outcome == 'CODE_FAILURE' || needs.main-smoke.outputs.outcome == 'INFRA_UNAVAILABLE')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A backstop only, at the platform's ceiling: every step below carries its
+    # own bound, and the smoke step is bounded by the budget the repository
+    # declares (budget_minutes, default 20, at most 280), which it stops short
+    # of so that, once the smoke step runs, its outcome is written. The step
+    # bounds plus the largest budget fit inside this ceiling.
+    timeout-minutes: 360
     permissions:
       contents: read
     steps:
       - name: Check out the identical SHA
+        timeout-minutes: 10
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.sha }}
@@ -212,6 +232,7 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Check out the trusted rail
+        timeout-minutes: 5
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: First-AI-Movers/.github
@@ -221,14 +242,17 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Make the trusted rail unwritable
+        timeout-minutes: 2
         # Repository commands run as themselves and can write anywhere the job
         # can, including into `policy/`. Dropping write permission closes the
         # one route by which repository content could become policy code that a
         # later lazy import executes.
         run: chmod -R a-w policy
-      - name: Read the history the repository declares
+      - name: Read the history and budget the repository declares
+        timeout-minutes: 5
         # Trusted code reads the declaration at the SHA from the shallow
-        # checkout; nothing the repository runs has run yet.
+        # checkout; nothing the repository runs has run yet, so no repository
+        # command can have written either output.
         id: history
         env:
           AEOS_SHA: ${{ github.sha }}
@@ -238,6 +262,7 @@ jobs:
           python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_SHA" \
             --declared-history >> "$GITHUB_OUTPUT" || true
       - name: Fetch the full history it declares (no credential is kept)
+        timeout-minutes: 20
         # Unshallows the same checkout with the job's read token, which the
         # action removes again before anything else runs. If the history is
         # still missing, or a credential was left behind, the smoke types it
@@ -254,11 +279,13 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Honour a repository Python pin, if it has one
+        timeout-minutes: 10
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version-file: repo/.python-version
       - name: Rerun the identical smoke
+        timeout-minutes: ${{ fromJSON(steps.history.outputs.budget_minutes || '20') }}
         env:
           AEOS_SHA: ${{ github.sha }}
           # Hardening for the interpreter running the trusted policy code. Set
@@ -272,6 +299,7 @@ jobs:
           python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_SHA" \
             --out smoke-confirm.json --summary-file "$GITHUB_STEP_SUMMARY" || true
       - name: Upload the confirmation (per SHA)
+        timeout-minutes: 5
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -288,11 +316,17 @@ jobs:
     needs: main-smoke
     if: always() && github.event_name == 'push' && (needs.main-smoke.outputs.outcome == 'CODE_FAILURE' || needs.main-smoke.outputs.outcome == 'INFRA_UNAVAILABLE')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A backstop only, at the platform's ceiling: every step below carries its
+    # own bound, and the smoke step is bounded by the budget the repository
+    # declares (budget_minutes, default 20, at most 280), which it stops short
+    # of so that, once the smoke step runs, its outcome is written. The step
+    # bounds plus the largest budget fit inside this ceiling.
+    timeout-minutes: 360
     permissions:
       contents: read
     steps:
       - name: Check out the parent commit
+        timeout-minutes: 10
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.before }}
@@ -301,6 +335,7 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Check out the trusted rail
+        timeout-minutes: 5
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: First-AI-Movers/.github
@@ -310,14 +345,17 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Make the trusted rail unwritable
+        timeout-minutes: 2
         # Repository commands run as themselves and can write anywhere the job
         # can, including into `policy/`. Dropping write permission closes the
         # one route by which repository content could become policy code that a
         # later lazy import executes.
         run: chmod -R a-w policy
-      - name: Read the history the repository declares
+      - name: Read the history and budget the repository declares
+        timeout-minutes: 5
         # Trusted code reads the declaration at the SHA from the shallow
-        # checkout; nothing the repository runs has run yet.
+        # checkout; nothing the repository runs has run yet, so no repository
+        # command can have written either output.
         id: history
         env:
           AEOS_BEFORE: ${{ github.event.before }}
@@ -327,6 +365,7 @@ jobs:
           python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_BEFORE" \
             --declared-history >> "$GITHUB_OUTPUT" || true
       - name: Fetch the full history it declares (no credential is kept)
+        timeout-minutes: 20
         # Unshallows the same checkout with the job's read token, which the
         # action removes again before anything else runs. If the history is
         # still missing, or a credential was left behind, the smoke types it
@@ -343,11 +382,13 @@ jobs:
           persist-credentials: false
           show-progress: false
       - name: Honour a repository Python pin, if it has one
+        timeout-minutes: 10
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version-file: repo/.python-version
       - name: Smoke the parent
+        timeout-minutes: ${{ fromJSON(steps.history.outputs.budget_minutes || '20') }}
         env:
           AEOS_BEFORE: ${{ github.event.before }}
           # Hardening for the interpreter running the trusted policy code. Set
@@ -361,6 +402,7 @@ jobs:
           python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_BEFORE" \
             --out smoke-parent.json --summary-file "$GITHUB_STEP_SUMMARY" || true
       - name: Upload the parent outcome (per SHA)
+        timeout-minutes: 5
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

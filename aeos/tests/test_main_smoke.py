@@ -722,8 +722,179 @@ class DeclaredHistoryTestCase(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             rc = smoke.main(["--repo-root", self.repo.root, "--expected-sha", sha, "--declared-history"])
-        self.assertEqual((rc, out.getvalue()), (0, "history=full\n"))
+        self.assertEqual((rc, out.getvalue()), (0, "history=full\nbudget_minutes=20\n"))
         self.assertFalse(os.path.exists(self.marker))
+
+
+class BudgetTestCase(unittest.TestCase):
+    """A declared budget bounds the whole smoke, and the outcome is always written."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        os.makedirs(os.path.join(self._tmp.name, "repo"))
+        self.repo = Repo(os.path.join(self._tmp.name, "repo"))
+
+    def declare(self, **extra) -> str:
+        document = {"schema_version": "1", "language_floor": False,
+                    "commands": [{"name": "first", "run": "echo first"}, {"name": "second", "run": "echo second"},
+                                 {"name": "third", "run": "echo third"}]}
+        document.update(extra)
+        self.repo.write(".github/aeos-smoke.json", json.dumps(document))
+        return self.repo.commit()
+
+    class Clock:
+        def __init__(self):
+            self.now, self.deadline = 1000.0, None
+
+        def __call__(self):
+            return self.now
+
+    class Recording(FakeTools):
+        """Records each timeout; running ``first`` moves the clock on by ``jump``."""
+
+        def __init__(self, sha, results=None, jump=0.0):
+            super().__init__(results={"rev-parse HEAD": (0, sha + "\n", ""), **(results or {})})
+            self.clock, self.timeouts, self.jump = BudgetTestCase.Clock(), [], jump
+
+        def run(self, argv, **kwargs):
+            self.timeouts.append(kwargs.get("timeout"))
+            if isinstance(argv, str) and "first" in argv:
+                self.clock.now += self.jump
+            return super().run(argv, **kwargs)
+
+    def test_the_budget_is_a_declared_exact_integer(self) -> None:
+        self.assertEqual(smoke.parse_smoke_config(json.dumps(
+            {"schema_version": "1", "commands": [{"name": "u", "run": "true"}]}).encode())["budget_minutes"], 20)
+        for good in (10, 90, 280):
+            with self.subTest(budget=good):
+                plan = smoke.parse_smoke_config(json.dumps({"schema_version": "1", "budget_minutes": good,
+                                                            "commands": [{"name": "u", "run": "true"}]}).encode())
+                self.assertEqual(plan["budget_minutes"], good)
+        for bad in (9, 2, 281, 0, True, "90", 90.0, None):
+            with self.subTest(budget=bad):
+                with self.assertRaises(smoke.SmokeConfigError):
+                    smoke.parse_smoke_config(json.dumps({"schema_version": "1", "budget_minutes": bad,
+                                                         "commands": [{"name": "u", "run": "true"}]}).encode())
+
+    def test_one_command_may_use_the_largest_budget(self) -> None:
+        self.assertEqual(smoke.MAX_TIMEOUT_SECONDS, smoke.MAX_BUDGET_MINUTES * 60)
+        plan = smoke.parse_smoke_config(json.dumps({"schema_version": "1", "timeout_seconds": 9000,
+                                                    "commands": [{"name": "u", "run": "true"}]}).encode())
+        self.assertEqual(plan["timeout_seconds"], 9000)
+
+    def test_the_query_prints_the_declared_budget_or_the_default(self) -> None:
+        for extra, expected in (({"budget_minutes": 150}, "150"), ({}, "20")):
+            with self.subTest(extra=extra):
+                sha = self.declare(**extra)
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    smoke.main(["--repo-root", self.repo.root, "--expected-sha", sha, "--declared-history"])
+                self.assertIn(f"budget_minutes={expected}\n", out.getvalue())
+
+    def test_a_spent_budget_stops_the_run_typed_and_runs_nothing_more(self) -> None:
+        sha = self.declare(budget_minutes=10)
+        tools = self.Recording(sha, jump=600)
+        result = smoke.run_smoke(self.repo.root, sha, tools=tools)
+        self.assertEqual(result["outcome"], "INFRA_UNAVAILABLE")
+        self.assertIsNone(result["signature"])
+        self.assertEqual([c["id"] for c in result["checks"]][-2:], ["first", "second"])
+        self.assertEqual(result["checks"][-1]["reason"], "SMOKE_BUDGET_EXHAUSTED")
+        self.assertFalse(any("second" in call or "third" in call for call in tools.calls),
+                         "nothing runs after the budget")
+        self.assertIn("budget ran out", result["note"])
+
+    def test_a_command_is_given_no_more_than_the_budget_left(self) -> None:
+        sha = self.declare(budget_minutes=10, timeout_seconds=600)
+        tools = self.Recording(sha)
+        smoke.run_smoke(self.repo.root, sha, tools=tools)
+        command_timeouts = tools.timeouts[-3:]
+        self.assertTrue(all(t <= 10 * 60 - smoke.BUDGET_MARGIN_SECONDS for t in command_timeouts), command_timeouts)
+
+    def test_a_command_cut_by_the_budget_is_typed_as_the_budget(self) -> None:
+        sha = self.declare(budget_minutes=10, timeout_seconds=600)
+        tools = self.Recording(sha, results={"echo first": subprocess.TimeoutExpired("echo first", 1)})
+        result = smoke.run_smoke(self.repo.root, sha, tools=tools)
+        self.assertEqual(result["checks"][-1]["id"], "first")
+        self.assertEqual(result["checks"][-1]["reason"], "SMOKE_BUDGET_EXHAUSTED")
+
+    def test_a_command_cut_by_its_own_timeout_keeps_its_reason(self) -> None:
+        """The near miss: a timeout shorter than the budget left is the command's own."""
+        sha = self.declare(budget_minutes=60, timeout_seconds=30)
+        tools = self.Recording(sha, results={"echo first": subprocess.TimeoutExpired("echo first", 30)})
+        result = smoke.run_smoke(self.repo.root, sha, tools=tools)
+        first = next(c for c in result["checks"] if c["id"] == "first")
+        self.assertEqual(first["reason"], "TIMEOUT:echo first")
+        self.assertEqual(result["checks"][-1]["id"], "third", "an own timeout does not end the run")
+
+    def test_every_floor_chunk_asks_the_budget_again(self) -> None:
+        """A floor check runs one process per 400 files; each one is bounded by what is left."""
+        clock = self.Clock()
+
+        class Chunks(FakeTools):
+            def __init__(self):
+                super().__init__(present=("ruff",))
+                self.clock, self.timeouts = clock, []
+
+            def run(self, argv, **kwargs):
+                allowed = kwargs["timeout"]
+                self.timeouts.append((allowed, clock.deadline - clock.now))
+                if allowed < 500:
+                    clock.now += allowed
+                    raise subprocess.TimeoutExpired(argv, allowed)
+                clock.now += 500
+                return subprocess.CompletedProcess(argv, 0, "", "")
+
+        targets = [f"f{i}.py" for i in range(801)]
+        for check in (smoke.check_compile, smoke.check_ruff):
+            with self.subTest(check=check.__name__):
+                clock.now, clock.deadline = 0.0, 1100.0
+                tools = Chunks()
+                result = check(self.repo.root, tools, smoke.Budget(clock.deadline, 600, clock), targets)
+                self.assertEqual(result["reason"], "SMOKE_BUDGET_EXHAUSTED")
+                self.assertEqual(len(tools.timeouts), 3)
+                self.assertTrue(all(allowed <= left for allowed, left in tools.timeouts), tools.timeouts)
+                self.assertLessEqual(clock.now, clock.deadline)
+
+    def test_a_spent_budget_still_writes_the_outcome_and_exits_infra(self) -> None:
+        sha = self.declare(budget_minutes=10)
+        tools = self.Recording(sha, jump=600)
+        out = os.path.join(self._tmp.name, "smoke.json")
+        with mock.patch.object(smoke, "Tools", lambda: tools), contextlib.redirect_stdout(io.StringIO()):
+            rc = smoke.main(["--repo-root", self.repo.root, "--expected-sha", sha, "--out", out])
+        self.assertEqual(rc, 3)
+        document = json.loads(pathlib.Path(out).read_text(encoding="utf-8"))
+        self.assertEqual((document["outcome"], document["checks"][-1]["reason"]),
+                         ("INFRA_UNAVAILABLE", "SMOKE_BUDGET_EXHAUSTED"))
+
+    def test_the_smallest_budget_covers_the_reads_made_before_it_can_be_asked(self) -> None:
+        """Identity, the declaration, the tree and the history checks run before
+        the budget exists. Count them on a real full-history run, and prove the
+        smallest budget's deadline leaves room for all of them at their bound."""
+        sha = self.declare(budget_minutes=10, history="full")
+        real_git, gitobject_calls = smoke.gitobject.run_git, []
+
+        def counting(*args, **kwargs):
+            gitobject_calls.append(args[1][0] if len(args) > 1 else kwargs)
+            return real_git(*args, **kwargs)
+
+        tools = self.Recording(sha, results={"is-shallow-repository": (0, "false\n", ""),
+                                             "--get-regexp": (1, "", "")})
+        with mock.patch.object(smoke.gitobject, "run_git", counting):
+            smoke.run_smoke(self.repo.root, sha, tools=tools)
+        before_commands = [c for c in tools.calls if not c.startswith("echo ")]
+        self.assertEqual(len(gitobject_calls) + len(before_commands), smoke.PREFLIGHT_GIT_CALLS,
+                         (gitobject_calls, before_commands))
+        per_call = max(smoke.gitobject.GIT_TIMEOUT_SECONDS, 60)
+        self.assertGreaterEqual(smoke.MIN_BUDGET_MINUTES * 60 - smoke.BUDGET_MARGIN_SECONDS,
+                                smoke.PREFLIGHT_GIT_CALLS * per_call)
+
+    def test_an_undeclared_budget_is_the_bound_every_smoke_had(self) -> None:
+        sha = self.declare()
+        limit = 20 * 60 - smoke.BUDGET_MARGIN_SECONDS
+        for jump, outcome in ((limit - 5, "PASS"), (limit + 5, "INFRA_UNAVAILABLE")):
+            with self.subTest(jump=jump):
+                result = smoke.run_smoke(self.repo.root, sha, tools=self.Recording(sha, jump=jump))
+                self.assertEqual(result["outcome"], outcome)
 
 
 class FailureOutputTestCase(unittest.TestCase):
@@ -1075,6 +1246,25 @@ class AdoptionContractTestCase(unittest.TestCase):
                 steps = self.workflow["jobs"][name]["steps"]
                 read = next(i for i, s in enumerate(steps) if s.get("id") == "history")
                 self.assertIs(steps[read + 1].get("continue-on-error"), True)
+
+    def test_every_smoke_step_has_its_own_bound_and_the_job_is_only_a_backstop(self) -> None:
+        bounded = "${{ fromJSON(steps.history.outputs.budget_minutes || '20') }}"
+        for name in self.SMOKE_JOBS:
+            with self.subTest(job=name):
+                job = self.workflow["jobs"][name]
+                self.assertEqual(job["timeout-minutes"], 360)
+                limits = [s.get("timeout-minutes") for s in job["steps"]]
+                self.assertNotIn(None, limits, "an unbounded step would inherit the 360-minute ceiling")
+                runs_smoke = [s for s in job["steps"] if "main_smoke.py" in (s.get("run") or "")
+                              and "--declared-history" not in s["run"]]
+                self.assertEqual([s["timeout-minutes"] for s in runs_smoke], [bounded])
+                deepen = [s["timeout-minutes"] for s in job["steps"]
+                          if s.get("if") == "steps.history.outputs.history == 'full'"]
+                others = [s["timeout-minutes"] for s in job["steps"] if s not in runs_smoke
+                          and s.get("if") != "steps.history.outputs.history == 'full'"]
+                self.assertEqual(sum(others) + 20, 57, "an undeclared smoke's worst case, as documented")
+                # The largest budget with full history still leaves the job room to start and finish.
+                self.assertLessEqual(sum(others) + sum(deepen) + smoke.MAX_BUDGET_MINUTES, 360 - 5)
 
     def test_no_new_artifact_or_step_output_carries_command_output(self) -> None:
         dumped = self.yaml.dump(self.workflow)
