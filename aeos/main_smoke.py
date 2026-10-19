@@ -82,6 +82,44 @@ MIN_TIMEOUT_SECONDS = 1
 MAX_TIMEOUT_SECONDS = 1800
 SCHEMA_VERSIONS = ("1", 1)
 
+#: How much history the checkout holds. ``shallow`` -- the merged commit alone --
+#: is the default. ``full`` is every commit the merged SHA reaches, for a
+#: repository whose own checks replay recorded history: a test that reads a
+#: recorded commit cannot run in a checkout that does not contain it. The
+#: workflow fetches it with the job's read token and keeps no credential.
+HISTORY_CHOICES = ("shallow", "full")
+DEFAULT_HISTORY = "shallow"
+
+#: A failing command's output, kept beside the outcome and never inside it. The
+#: start of a stream holds the first traceback and the end holds the summary, so
+#: both ends are kept and the middle is dropped.
+FAILURE_OUTPUT_HEAD_CHARS = 8192
+FAILURE_OUTPUT_TAIL_CHARS = 4096
+
+#: The merge gate's credential shapes (``merge_ready_gate.SECRET_SHAPES``),
+#: restated so this module imports nothing beside it. A test pins the two equal.
+#: No smoke command holds a credential; this is the second lock on that door.
+CREDENTIAL_SHAPES = (
+    ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,255}\b")),
+    ("github_pat", re.compile(r"\bgithub_pat_[A-Za-z0-9]{22,}_[A-Za-z0-9]{50,}\b")),
+    ("aws_access_key_id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("private_key_block", re.compile(r"-----BEGIN[A-Z ]{0,20} PRIVATE KEY-----")),
+    ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("anthropic_api_key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{24,}\b")),
+    ("provider_api_key", re.compile(r"\bsk-(?:proj-|live-|test-)?[A-Za-z0-9]{32,}\b")),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+)
+CREDENTIAL_SHAPES_COMBINED = re.compile(
+    "|".join(f"(?P<{name}>{pattern.pattern})" for name, pattern in CREDENTIAL_SHAPES)
+)
+#: The gate only detects a private key by its header line; publishing text needs
+#: the whole block gone, through its END line or, unterminated, the end of stream.
+PRIVATE_KEY_BLOCK = re.compile(
+    dict(CREDENTIAL_SHAPES)["private_key_block"].pattern
+    + r".*?(?:-----END[A-Z ]{0,20} PRIVATE KEY-----|\Z)",
+    re.DOTALL,
+)
+
 #: Directories that are vendored, generated, or virtual-environment content. A
 #: syntax floor that fails on a checked-in dependency tree is reporting on
 #: somebody else's code, and on this rail that would drive a revert.
@@ -284,7 +322,18 @@ def parse_smoke_config(raw: bytes) -> dict:
         )
 
     plan = {"setup": [], "commands": [], "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
-            "language_floor": True}
+            "language_floor": True, "history": DEFAULT_HISTORY}
+
+    history = document.get("history", DEFAULT_HISTORY)
+    if not isinstance(history, str) or history not in HISTORY_CHOICES:
+        # Exact values only, for the language_floor reason: a misspelling read
+        # as the default would quietly decide which history the checks see.
+        raise SmokeConfigError(
+            "SMOKE_CONFIG_INVALID",
+            f"{SMOKE_CONFIG_PATH}: history must be one of {', '.join(HISTORY_CHOICES)}, "
+            f"not {history!r}",
+        )
+    plan["history"] = history
 
     floor = document.get("language_floor", True)
     if not isinstance(floor, bool):
@@ -361,6 +410,46 @@ def load_smoke_config(repo_root: Path, sha: str):
     if raw is None:
         return None
     return parse_smoke_config(raw)
+
+
+def declared_history(repo_root: Path, sha: str) -> str:
+    """The history the declaration at ``sha`` asks for, read before the checks.
+
+    The workflow asks this from the shallow checkout to decide whether to fetch
+    more. Anything but a readable declaration saying ``full`` answers the
+    default: an absent, unreadable or invalid declaration is the smoke's own
+    finding to report, and the smoke reads it again itself.
+    """
+    try:
+        declared = load_smoke_config(Path(repo_root), sha)
+    except Exception:  # noqa: BLE001 - the smoke reports it, typed
+        return DEFAULT_HISTORY
+    return declared["history"] if declared else DEFAULT_HISTORY
+
+
+def check_history(repo_root: Path, tools: Tools) -> dict:
+    """A declaration asked for full history: prove the checkout holds it."""
+    proc, infra = _run(tools, ["git", "rev-parse", "--is-shallow-repository"], repo_root, 60)
+    if infra or proc.returncode != 0 or proc.stdout.strip() not in ("true", "false"):
+        return _check("history", "INFRA_UNAVAILABLE", infra or "GIT_ERROR",
+                      "git could not say whether the checkout is shallow")
+    if proc.stdout.strip() == "true":
+        return _check("history", "INFRA_UNAVAILABLE", "HISTORY_UNAVAILABLE",
+                      "the declaration asks for full history and the checkout is shallow -- "
+                      "a checkout fault, not code evidence")
+    # The fetch that unshallowed this checkout held the job's token. Whatever
+    # happened to that step, nothing runs while a credential route is still in
+    # the checkout's own configuration.
+    proc, infra = _run(tools, ["git", "config", "--local", "--name-only", "--get-regexp",
+                               r"^(http\..*\.extraheader|includeif\..*)$"], repo_root, 60)
+    if infra or proc.returncode not in (0, 1):
+        return _check("history", "INFRA_UNAVAILABLE", infra or "GIT_ERROR",
+                      "git could not list the checkout's credential configuration")
+    if proc.returncode == 0:
+        return _check("history", "INFRA_UNAVAILABLE", "CHECKOUT_CREDENTIAL_KEPT",
+                      "the full-history fetch left a credential route in the checkout; "
+                      "no repository command may run beside it")
+    return _check("history", "PASS", "PASS", "the checkout holds full history and no credential")
 
 
 # ---------- derived defaults ----------------------------------------------------
@@ -555,12 +644,37 @@ def check_ruff(repo_root: Path, tools: Tools, timeout: int, targets=None) -> dic
 BUILTINS = {"__compile__": check_compile, "__ruff__": check_ruff}
 
 
-def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout: int, *, is_setup: bool) -> dict:
+def _redacted(text: str) -> str:
+    text = PRIVATE_KEY_BLOCK.sub("[REDACTED:private_key_block]", text)
+    return CREDENTIAL_SHAPES_COMBINED.sub(lambda m: f"[REDACTED:{m.lastgroup}]", text)
+
+
+def bounded_output(text) -> str:
+    """One stream of a failing command: redacted, the middle dropped, redacted again.
+
+    Redacting first means a cut can never leave a redactable prefix behind;
+    redacting again catches a shape the join itself made."""
+    text = _redacted(text or "")
+    limit = FAILURE_OUTPUT_HEAD_CHARS + FAILURE_OUTPUT_TAIL_CHARS
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    return _redacted(text[:FAILURE_OUTPUT_HEAD_CHARS] + f"\n[... {omitted} characters omitted ...]\n"
+                     + text[-FAILURE_OUTPUT_TAIL_CHARS:])
+
+
+def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout: int, *, is_setup: bool,
+                 failure_output=None) -> dict:
     """Run one repository-declared command.
 
     This executes repository content by design -- a smoke that does not run the
     repository's own commands is not a smoke. It runs only after the code has
     already landed on the default branch, in a job that holds no credential.
+
+    When it exits non-zero, a bounded copy of its output is appended to
+    ``failure_output``, if given. That copy is for a person reading why: it never
+    reaches the check, the outcome or the signature, which must stay identical
+    across two runs whose output differs by a timestamp.
     """
     name = entry["name"]
     cid = f"setup:{name}" if is_setup else name
@@ -569,6 +683,10 @@ def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout: int, *, is
         return _check(cid, "INFRA_UNAVAILABLE", infra, f"{name!r} could not be executed")
     if proc.returncode == 0:
         return _check(cid, "PASS", "PASS", f"{name!r} exited 0")
+    if failure_output is not None:
+        failure_output.append({"check": cid, "exit": proc.returncode,
+                               "stdout": bounded_output(proc.stdout),
+                               "stderr": bounded_output(proc.stderr)})
     if is_setup:
         # A setup step is provisioning, not the subject under test. Its failure
         # is an outage by definition: nothing was measured about the code. The
@@ -678,7 +796,7 @@ def promote_repeated_infra(result, previous):
             "signature": signature(checks), "promoted_from": "INFRA_UNAVAILABLE"}
 
 
-def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None) -> dict:
+def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None, failure_output=None) -> dict:
     repo_root = Path(repo_root)
     tools = tools or Tools()
     started = time.monotonic()
@@ -708,6 +826,14 @@ def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None) -> dict:
         return _finish(checks, expected_sha, started, source, "")
     source = plan["source"]
 
+    if declared is not None and declared["history"] == "full":
+        checks.append(check_history(repo_root, tools))
+        if checks[-1]["status"] != "PASS":
+            # The checks that read recorded history would fail for want of it,
+            # and that failure would read as the code's.
+            return _finish(checks, expected_sha, started, source,
+                           "the declared history is missing; the checks were not run")
+
     if not plan["commands"]:
         checks.append(_check(
             "smoke", "PASS", "NO_SMOKE_DEFINED",
@@ -721,7 +847,8 @@ def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None) -> dict:
     timeout = plan["timeout_seconds"]
     notes = [note] if note else []
     for entry in plan["setup"]:
-        check = run_declared(repo_root, entry, tools, timeout, is_setup=True)
+        check = run_declared(repo_root, entry, tools, timeout, is_setup=True,
+                             failure_output=failure_output)
         if check["status"] == "PASS":
             checks.append(check)
             continue
@@ -748,7 +875,8 @@ def run_smoke(repo_root, expected_sha: str, tools: Tools | None = None) -> dict:
         if builtin is not None:
             checks.append(builtin(repo_root, tools, timeout, plan.get("python_targets") or []))
         else:
-            checks.append(run_declared(repo_root, entry, tools, timeout, is_setup=False))
+            checks.append(run_declared(repo_root, entry, tools, timeout, is_setup=False,
+                                       failure_output=failure_output))
     return _finish(checks, expected_sha, started, source, note)
 
 
@@ -797,13 +925,30 @@ def main(argv=None) -> int:
     ap.add_argument("--expected-sha", required=True)
     ap.add_argument("--out")
     ap.add_argument("--summary-file")
+    ap.add_argument("--declared-history", action="store_true",
+                    help="print history=<shallow|full> as declared at the SHA, and run nothing")
     args = ap.parse_args(argv)
 
-    result = run_smoke(args.repo_root, args.expected_sha.strip().lower())
+    if args.declared_history:
+        sys.stdout.write(f"history={declared_history(args.repo_root, args.expected_sha.strip().lower())}\n")
+        return 0
+
+    failures: list[dict] = []
+    result = run_smoke(args.repo_root, args.expected_sha.strip().lower(), failure_output=failures)
+    if result["outcome"] == "PASS":
+        # A best-effort step can fail inside a passing run; a passing outcome
+        # file stays exactly what it was.
+        failures = []
     text = render(result)
+    if failures and args.out:
+        text += ("\n> Each failing command's own output, bounded and redacted, is kept in the outcome "
+                 "file's `failure_output`. It decides nothing.\n")
     sys.stdout.write(text)
     if args.out:
-        Path(args.out).write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        # Beside the outcome, never inside it: no check, outcome or signature
+        # reads it, and the job log never carries it.
+        document = {**result, "failure_output": failures} if failures else result
+        Path(args.out).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     if args.summary_file:
         try:
             with open(args.summary_file, "a", encoding="utf-8") as handle:
