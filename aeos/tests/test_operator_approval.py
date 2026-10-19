@@ -324,6 +324,32 @@ class MachineRouteTests(unittest.TestCase):
         # unbound, the route is exactly today's
         self.assertEqual(self.route(evidence(), pol=self.unbound), dp.MACHINE_ROUTE_PROGRAMME_ABSENT)
 
+    def test_an_approval_does_not_admit_a_module_entering_the_protected_set(self):
+        # agent-toolkit #3052: an approval is given on a diff, and an entered module's bytes are not in it.
+        for status in ("entered", "modified", "renamed"):
+            entering = dp.Entry("scripts/flight_deck/needs_you.py", status, "2" * 64, "3" * 64, None, "100644", "100644")
+            entering.unseen = True  # candidate_entries marks it: the diff does not show all its bytes
+            with self.subTest(status=status):
+                self.assertEqual(dp.machine_route(self.policy, evidence(), None, REPO, [self.entry, entering], 0.0,
+                                                  head_sha=HEAD), dp.MACHINE_ROUTE_APPROVAL_ENTERED_NOT_IN_DIFF)
+                admission = {}
+                dp.machine_route(self.policy, evidence(), None, REPO, [entering], 0.0, head_sha=HEAD,
+                                 admission=admission)
+                self.assertEqual(admission, {})
+        self.assertIsNone(self.route(evidence()))  # the same approval over entries a diff shows still admits
+
+    def test_no_grant_reaches_a_root_or_a_package_that_would_replace_one(self):
+        root = next(r for r in self.policy.roots if r.startswith("scripts/agent_relay/"))
+        body = ("<!-- aeos-programme: First-AI-Movers/agent-toolkit#3752 -->\n"
+                "<!-- scoped-machine-grant: First-AI-Movers/agent-toolkit#9@sha256:" + "c" * 64 + " -->")
+        for path in (root, root[:-3] + "/__init__.py", root[:-3] + "/helper.py"):
+            shadow = dp.Entry(path, "added", dp.ABSENT, "1" * 64, None, "000000", "100644")
+            with self.subTest(path=path):
+                self.assertEqual(dp.machine_route(self.policy, evidence(body=body), None, REPO, [shadow], 0.0,
+                                                  head_sha=HEAD), scoped_grant.SCOPED_GRANT_ENVELOPE_INVALID)
+        # a non-root entry goes on to the programme and the grant judge
+        self.assertNotEqual(self.route(evidence(body=body)), scoped_grant.SCOPED_GRANT_ENVELOPE_INVALID)
+
     def test_a_failed_approval_falls_through_to_the_programme_route(self):
         marked = evidence([], body="<!-- aeos-programme: First-AI-Movers/agent-toolkit#6246 -->")
         self.assertEqual(self.route(marked), dp.MACHINE_ROUTE_PROGRAMME_UNAVAILABLE)

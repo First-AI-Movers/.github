@@ -46,10 +46,10 @@ review, do not wait. `aeos-merge-ready` is the one merge-blocking verdict.
 **Two exceptions, both deliberate, both in this repository only.** Each fails with
 `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`:
 
-- **Who may change the judge.** A control-plane change here (`aeos/**`,
-  `.github/workflows/**`, `.github/actions/**`, `.github/aeos-gate.json`,
-  `.github/aeos-smoke.json`) is judged on its content only when the operator decided
-  it. Either the trusted evidence names a pinned operator principal (type User) as the
+- **Who may change the judge.** A control-plane change here (everything under `aeos/`
+  except a Markdown file directly in it; every `.gitattributes`; `.github/workflows/**`;
+  `.github/actions/**`; `.github/aeos-gate.json`; `.github/aeos-smoke.json`) is judged on its content only when
+  the operator decided it. Either the trusted evidence names a pinned operator principal (type User) as the
   PR author *and* as the run's actor, or the machine principal authored, ran and
   committed it and the operator's latest decisive review **approves that exact head**
   (`aeos/operator_approval.py`). Anything else is refused, whatever the content.
@@ -62,7 +62,7 @@ review, do not wait. `aeos-merge-ready` is the one merge-blocking verdict.
   organization. It is refused whoever authors it; an organization administrator
   merges it under a ruleset bypass.
 
-These are the only human gates in the merge path. The same changes in a consumer
+These are the only human gates in the merge path. A Markdown file directly in `aeos/` is an ordinary file here: no workflow runs it, the gate never reads it and nothing imports it, so a change confined to such prose is judged on content and merges like any other (agent-toolkit #3052, 2026-10-19). Every other path under `aeos/` stays control plane, a new file or directory included: the judge puts `aeos/` first on its import path, and its tests are the evidence the operator reads when he approves a change to the judge. A `.gitattributes` file anywhere in this repository is control plane too, because it rewrites the judge's checked-out bytes. The same changes in a consumer
 repository are judged on content and merge. `aeos/README.md` is the contract for
 both.
 

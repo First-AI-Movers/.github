@@ -185,6 +185,52 @@ class GateTestCase(unittest.TestCase):
                                evidence_path=self._evidence_file("aeos-autonomous-main[bot]"))
         self.assertNotIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
 
+    def test_policy_repository_prose_is_ordinary_and_the_rest_of_aeos_is_not(self) -> None:
+        # agent-toolkit #3052: what no workflow runs, the gate never reads and nothing imports merges like any file.
+        policy_dir = self._machine_policy_dir()
+        machine = self._evidence_file("aeos-autonomous-main[bot]")
+        self.repo.write("aeos/scoped_grant.py", "J = 1\n")
+        self.repo.base = self.repo.commit("a judge module on the base")
+        for path in ("aeos/README.md", "aeos/Main-Smoke.MD"):
+            self.repo.write(path, "prose\n")
+        head = self.repo.commit("bot edits the prose")
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir, evidence_path=machine)
+        self.assertEqual(report.control_plane, [])
+        self.assertTrue(report.passed, [f.code for f in report.findings])
+        # each of these, added on top, is still the operator's: tests are the evidence for a judge change, a
+        # directory is a package portion on the judge's import path, an attributes file rewrites its checkout
+        for path, content in (("aeos/tests/test_new.py", "def test_x():\n    assert True\n"),
+                              ("aeos/tests/vectors.json", "{}\n"), ("aeos/tests/README.md", "prose\n"),
+                              ("aeos/yaml/README.md", "prose\n"), ("aeos/.gitignore", "*.pyc\n"),
+                              ("aeos/new_helper.py", "X = 1\n"), ("aeos/json.py", "X = 1\n"),
+                              ("aeos/standing-seat-ceilings.json", "{}\n"), ("aeos/notes.txt", "x\n"),
+                              (".gitattributes", "aeos/*.py eol=crlf\n"), ("aeos/.gitattributes", "*.py eol=crlf\n"),
+                              ("docs/.GitAttributes", "* text\n"), (".github/workflows/README.md", "prose\n"),
+                              (".github/actions/x/action.yml", "name: x\n"), (".github/aeos-smoke.json", "{}\n")):
+            self.repo.write(path, content)
+            head = self.repo.commit(f"bot adds {path}")
+            report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir, evidence_path=machine)
+            self.assertIn(path, report.control_plane, path)
+            self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings}, path)
+            self.repo.remove(path)
+            self.repo.base = self.repo.commit(f"drop {path} again")
+        # an attributes file in a consumer repository is ordinary, as before
+        self.assertEqual(gate.control_plane_violations([".gitattributes"], "First-AI-Movers/example"), [])
+
+    def test_moving_a_policy_module_into_prose_still_deletes_a_control_plane_path(self) -> None:
+        policy_dir = self._machine_policy_dir()
+        self.repo.write("aeos/scoped_grant.py", "J = 1\n")
+        self.repo.base = self.repo.commit("a judge module on the base")
+        self.repo.remove("aeos/scoped_grant.py")
+        self.repo.write("aeos/scoped_grant.md", "J = 1\n")
+        head = self.repo.commit("bot moves the judge module into prose")
+        report = self.run_gate(head, repository="First-AI-Movers/.github", policy_dir=policy_dir,
+                               evidence_path=self._evidence_file("aeos-autonomous-main[bot]"))
+        self.assertEqual(report.control_plane, ["aeos/scoped_grant.py"])
+        self.assertIn(gate.CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, {f.code for f in report.findings})
+        # in a consumer repository aeos/ is ordinary code, as before
+        self.assertEqual(gate.control_plane_violations(["aeos/scoped_grant.py"], "First-AI-Movers/example"), [])
+
     def test_the_evidence_file_reaches_the_gate_through_the_cli(self) -> None:
         self.repo.write("aeos/merge_ready_gate.py", "X = 1\n")
         head = self.repo.commit("bot edits the gate")

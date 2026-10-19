@@ -126,7 +126,7 @@ lane, where every ordinary floor still applies *and* these do:
 | `.github/workflows/**`, `.github/actions/**` | no `pull_request_target`; `permissions` declared and never `write-all`; every non-local `uses:` pinned to a 40-hex commit; no author-controlled free text or `secrets.*` interpolated into a `run:` body; no consumer repository publishing the reserved `aeos-merge-ready` path or check name |
 | `.github/aeos-gate.json` | valid schema; no blanket allowlist entry that would exempt the whole repository from secret-shape detection |
 | `.github/aeos-smoke.json` | valid schema; a declared `smoke_suites` / `compile_roots` may not be empty — a rail rewritten to run nothing still reports green |
-| `aeos/**` *(this repository only)* | parses; `merge_ready_gate.py` still declares its load-bearing constants, so the gate cannot lose one through an autonomous merge |
+| `aeos/**` *(this repository only; not a Markdown file directly in `aeos/`)* | parses; `merge_ready_gate.py` still declares its load-bearing constants, so the gate cannot lose one through an autonomous merge |
 
 The allowlist **never** exempts a control-plane path. That conjunct is what keeps
 the gate config a decision rather than a self-serve bypass, and it is now checked
@@ -182,9 +182,13 @@ ordinary auto-squashed pull request. This conjunct makes that require an off-nod
 operator signature.
 
 - **Protected set.** `derivation_policy.members` is a *generated, bounded* list: the
-  first-party import closure of `derivation_policy.roots` under `scripts/` (whole AST, so a
-  lazy in-function import counts; package `__init__.py` modules count because they execute
-  on import), intersected with `allowlist_prefixes` + `allowlist_files`. The gate
+  modules `derivation_policy.roots` reach through first-party imports under `scripts/`
+  (whole AST, so a lazy in-function import counts; package `__init__.py` modules count
+  because they execute on import; a package wins over a same-named module file, as in
+  CPython) along chains made only of modules inside `allowlist_prefixes` +
+  `allowlist_files`. A module reached only through an unprotected module is ordinary code:
+  none of the validator classes above lives there, and the unprotected module in front of
+  it is already ordinary code (agent-toolkit #3052, 2026-10-19). The gate
   regenerates that set from the **base** commit on every evaluation, with trusted code
   parsing candidate Python as data, and protects the union of `members` and that
   regenerated set. **Growth is not drift**: a member the closure gained after `members`
@@ -198,9 +202,12 @@ operator signature.
   blocks nothing. The gate regenerates the same
   closure at the **candidate head** too, and the set the candidate must sign is the union:
   a helper added under the allowlist and imported from a root is protected in the same
-  change, so the signature covers the whole effective validator change. A file under the
-  allowlist that no root imports is ordinary code; so is a newly imported helper outside
-  the allowlist (the ADR's accepted residual).
+  change, so the signature covers the whole effective validator change. A module that
+  enters the protected set at the head without changing is an `entered` entry, with its
+  existing bytes as both images, so a signature, envelope or grant answers for bytes that
+  were written while it was ordinary code. A file under the allowlist that no protected
+  chain reaches is ordinary code; so is a newly imported helper outside the allowlist (the
+  ADR's accepted residual).
 - **Signed diff.** A candidate whose merge-base→head diff (rename-aware) touches a member
   must carry `aeos/derivation-policy-manifest.json` and `aeos/derivation-policy-manifest.sig`
   on its head. The manifest is the canonical representation of the protected diff — the
@@ -323,7 +330,8 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   authorise rewriting the ceiling parser; a malformed envelope entry anywhere invalidates the
   block; evidence that resolves inside the candidate tree is malformed.
 - **Only the operator decides a change to the judge.** In this repository, a control-plane
-  change (`aeos/**`, the workflows) is judged on its content only when the trusted evidence
+  change (everything under `aeos/` except a Markdown file directly in it, every `.gitattributes`, and the workflows) is judged
+  on its content only when the trusted evidence
   either names a pinned operator principal (type User) as PR author and an operator principal as
   the run's actor, **or** shows the operator approved exactly this machine-authored head (the
   operator-approval route below). A machine principal without that approval, any other `[bot]`,
@@ -648,7 +656,7 @@ worth validating before it is merged.
 In this repository, a pull request that touches `.github/workflows/**` or `aeos/**`,
 including a change to the gate itself, is judged on its content only when an
 identified operator authors and runs it, or approves its exact machine-authored
-head. Anything else is refused by design.
+head. Anything else is refused by design. A Markdown file directly in `aeos/` is an ordinary file here: no workflow runs it, the gate never reads it and nothing imports it, so a change confined to such prose is judged on content and merges like any other (agent-toolkit #3052, 2026-10-19). Every other path under `aeos/` stays control plane, a new file or directory included: the judge puts `aeos/` first on its import path, and its tests are the evidence the operator reads when he approves a change to the judge. A `.gitattributes` file anywhere in this repository is control plane too, because it rewrites the judge's checked-out bytes.
 
 ## Tests
 
