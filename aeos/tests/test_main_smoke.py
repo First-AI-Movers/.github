@@ -8,6 +8,8 @@ Plain ``unittest``; no third-party runner is required.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import pathlib
@@ -16,6 +18,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -623,6 +626,240 @@ class SmokeTestCase(unittest.TestCase):
         self.assertIn(result["signature"], text)
 
 
+class DeclaredHistoryTestCase(unittest.TestCase):
+    """A repository may declare that its checks need full history."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        os.makedirs(os.path.join(self._tmp.name, "origin"))
+        self.repo = Repo(os.path.join(self._tmp.name, "origin"))
+        self.repo.write("first.txt", "recorded\n")
+        self.first = self.repo.commit("first")
+        self.marker = os.path.join(self._tmp.name, "ran")
+
+    def declare(self, history) -> str:
+        document = {"schema_version": "1",
+                    "commands": [{"name": "replay",
+                                  "run": f"git cat-file -e {self.first} && touch {self.marker}"}]}
+        if history is not None:
+            document["history"] = history
+        self.repo.write(".github/aeos-smoke.json", json.dumps(document))
+        return self.repo.commit("declare")
+
+    def shallow_clone(self, sha) -> str:
+        clone = os.path.join(self._tmp.name, "shallow")
+        git(self._tmp.name, "clone", "-q", "--depth", "1", f"file://{self.repo.root}", clone)
+        self.assertEqual(git(clone, "rev-parse", "HEAD"), sha)
+        self.assertEqual(git(clone, "rev-parse", "--is-shallow-repository"), "true")
+        return clone
+
+    def test_history_defaults_to_shallow_and_is_never_checked_then(self) -> None:
+        sha = self.declare(None)
+        self.assertEqual(smoke.declared_history(self.repo.root, sha), "shallow")
+        result = smoke.run_smoke(self.repo.root, sha)
+        self.assertNotIn("history", [c["id"] for c in result["checks"]])
+        self.assertEqual(result["outcome"], "PASS")
+
+    def test_full_history_present_runs_the_checks_that_read_it(self) -> None:
+        sha = self.declare("full")
+        self.assertEqual(smoke.declared_history(self.repo.root, sha), "full")
+        result = smoke.run_smoke(self.repo.root, sha)
+        self.assertEqual(result["outcome"], "PASS")
+        history = [c for c in result["checks"] if c["id"] == "history"]
+        self.assertEqual([c["status"] for c in history], ["PASS"])
+        self.assertTrue(os.path.exists(self.marker))
+
+    def test_full_history_missing_is_infrastructure_and_nothing_runs(self) -> None:
+        """Without the guard the replay command fails, and that reads as the code's fault."""
+        sha = self.declare("full")
+        result = smoke.run_smoke(self.shallow_clone(sha), sha)
+        self.assertEqual(result["outcome"], "INFRA_UNAVAILABLE")
+        self.assertEqual(result["checks"][-1]["reason"], "HISTORY_UNAVAILABLE")
+        self.assertIsNone(result["signature"])
+        self.assertFalse(os.path.exists(self.marker), "no command may run without the history")
+
+    def test_a_shallow_declaration_runs_shallow(self) -> None:
+        sha = self.declare("shallow")
+        result = smoke.run_smoke(self.shallow_clone(sha), sha)
+        self.assertEqual(result["outcome"], "CODE_FAILURE")
+        self.assertEqual(result["checks"][-1]["reason"], "COMMAND_FAILURE:replay:exit1")
+
+    def test_a_credential_left_by_the_fetch_stops_everything(self) -> None:
+        sha = self.declare("full")
+        for key in ("http.https://github.com/.extraheader", "includeIf.gitdir:/.path"):
+            with self.subTest(key=key):
+                git(self.repo.root, "config", "--local", key, "AUTHORIZATION: basic eA==")
+                result = smoke.run_smoke(self.repo.root, sha)
+                git(self.repo.root, "config", "--local", "--unset", key)
+                self.assertEqual(result["outcome"], "INFRA_UNAVAILABLE")
+                self.assertEqual(result["checks"][-1]["reason"], "CHECKOUT_CREDENTIAL_KEPT")
+                self.assertFalse(os.path.exists(self.marker))
+        self.assertEqual(smoke.run_smoke(self.repo.root, sha)["outcome"], "PASS")
+
+    def test_a_history_value_must_be_exact(self) -> None:
+        for bad in ("FULL", "deep", "", True, 1, None, ["full"]):
+            with self.subTest(history=bad):
+                sha = self.declare(bad) if bad is not None else None
+                if sha is None:
+                    self.repo.write(".github/aeos-smoke.json", json.dumps(
+                        {"schema_version": "1", "history": None,
+                         "commands": [{"name": "replay", "run": "true"}]}))
+                    sha = self.repo.commit("null")
+                result = smoke.run_smoke(self.repo.root, sha)
+                self.assertEqual(result["checks"][-1]["reason"], "SMOKE_CONFIG_INVALID")
+                self.assertEqual(smoke.declared_history(self.repo.root, sha), "shallow")
+
+    def test_an_unreadable_declaration_answers_shallow_and_the_smoke_reports_it(self) -> None:
+        self.repo.write(".github/aeos-smoke.json", "{not json")
+        sha = self.repo.commit("broken")
+        self.assertEqual(smoke.declared_history(self.repo.root, sha), "shallow")
+        self.assertEqual(smoke.run_smoke(self.repo.root, sha)["checks"][-1]["reason"],
+                         "SMOKE_CONFIG_INVALID")
+
+    def test_the_cli_prints_only_the_answer_and_runs_nothing(self) -> None:
+        sha = self.declare("full")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = smoke.main(["--repo-root", self.repo.root, "--expected-sha", sha, "--declared-history"])
+        self.assertEqual((rc, out.getvalue()), (0, "history=full\n"))
+        self.assertFalse(os.path.exists(self.marker))
+
+
+class FailureOutputTestCase(unittest.TestCase):
+    """A failing command's output is kept beside the outcome, never inside it."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        os.makedirs(os.path.join(self._tmp.name, "repo"))
+        self.repo = Repo(os.path.join(self._tmp.name, "repo"))
+
+    def declare(self, document) -> str:
+        self.repo.write(".github/aeos-smoke.json", json.dumps(document))
+        return self.repo.commit()
+
+    def test_output_is_kept_and_never_reaches_the_signature(self) -> None:
+        sha = self.declare({"schema_version": "1", "commands": [
+            {"name": "unit", "run": "date +%s%N; echo collection error >&2; exit 2"}]})
+        first, second = [], []
+        a = smoke.run_smoke(self.repo.root, sha, failure_output=first)
+        b = smoke.run_smoke(self.repo.root, sha, failure_output=second)
+        self.assertEqual(a["signature"], b["signature"])
+        self.assertNotEqual(first[0]["stdout"], second[0]["stdout"])
+        self.assertEqual((first[0]["check"], first[0]["exit"]), ("unit", 2))
+        self.assertIn("collection error", first[0]["stderr"])
+        self.assertNotIn("collection error", json.dumps(a))
+
+    def test_a_failing_setup_step_keeps_its_output_and_a_passing_command_none(self) -> None:
+        sha = self.declare({"schema_version": "1",
+                            "setup": [{"name": "deps", "run": "echo no index >&2; exit 1"}],
+                            "commands": [{"name": "unit", "run": "true"}]})
+        kept = []
+        smoke.run_smoke(self.repo.root, sha, failure_output=kept)
+        self.assertEqual([(k["check"], k["stderr"]) for k in kept], [("setup:deps", "no index\n")])
+        passing = []
+        smoke.run_smoke(self.repo.root, self.declare(
+            {"schema_version": "1", "commands": [{"name": "unit", "run": "echo fine"}]}),
+            failure_output=passing)
+        self.assertEqual(passing, [])
+
+    def test_output_is_bounded_and_keeps_both_ends(self) -> None:
+        head, tail = smoke.FAILURE_OUTPUT_HEAD_CHARS, smoke.FAILURE_OUTPUT_TAIL_CHARS
+        text = "H" * head + "m" * 50000 + "T" * tail
+        kept = smoke.bounded_output(text)
+        self.assertTrue(kept.startswith("H" * head) and kept.endswith("T" * tail))
+        self.assertIn("[... 50000 characters omitted ...]", kept)
+        self.assertNotIn("m", kept.replace("omitted", ""))
+        self.assertEqual(smoke.bounded_output("short"), "short")
+
+    def test_credential_shapes_are_redacted_before_the_cut(self) -> None:
+        token = "ghp_" + "A1b2" * 10
+        self.assertEqual(smoke.bounded_output(f"x {token} y"), "x [REDACTED:github_token] y")
+        head = smoke.FAILURE_OUTPUT_HEAD_CHARS
+        straddling = "p" * (head - 10) + " " + token + " " + "q" * 60000
+        kept = smoke.bounded_output(straddling)
+        self.assertFalse("A1b2" in kept, "a cut through a token must not keep its prefix")
+
+    def test_a_whole_private_key_block_is_redacted_terminated_or_not(self) -> None:
+        begin, end = "-----BEGIN " + "RSA PRIVATE KEY-----", "-----END " + "RSA PRIVATE KEY-----"
+        body = "\n".join(["MIIEpAIBAAKCAQEA" + "x" * 48] * 20)
+        whole = f"before\n{begin}\n{body}\n{end}\nafter"
+        self.assertEqual(smoke.bounded_output(whole), "before\n[REDACTED:private_key_block]\nafter")
+        self.assertEqual(smoke.bounded_output(f"x {begin}\n{body}"), "x [REDACTED:private_key_block]")
+        head = smoke.FAILURE_OUTPUT_HEAD_CHARS
+        straddling = "p" * (head - 40) + f"\n{begin}\n{body * 40}\n{end}\n" + "q" * 60000
+        kept = smoke.bounded_output(straddling)
+        self.assertNotIn("MIIEpAIBAAKCAQEA", kept)
+        self.assertNotIn(end, kept)
+
+    def test_the_credential_shapes_are_the_gates(self) -> None:
+        import merge_ready_gate
+        self.assertEqual([(n, p.pattern, p.flags) for n, p in smoke.CREDENTIAL_SHAPES],
+                         [(n, p.pattern, p.flags) for n, p in merge_ready_gate.SECRET_SHAPES])
+
+    def test_the_outcome_file_keeps_it_beside_the_decided_fields(self) -> None:
+        sha = self.declare({"schema_version": "1",
+                            "commands": [{"name": "unit", "run": "echo traceback line; exit 2"}]})
+        out = os.path.join(self._tmp.name, "smoke.json")
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            rc = smoke.main(["--repo-root", self.repo.root, "--expected-sha", sha, "--out", out])
+        self.assertEqual(rc, 1)
+        document = json.loads(pathlib.Path(out).read_text(encoding="utf-8"))
+        kept = document.pop("failure_output")
+        self.assertEqual(kept, [{"check": "unit", "exit": 2, "stdout": "traceback line\n", "stderr": ""}])
+        decided = smoke.run_smoke(self.repo.root, sha)
+        for key in ("outcome", "signature", "source", "checks", "note"):
+            self.assertEqual(document[key], decided[key], key)
+        self.assertNotIn("traceback line", json.dumps(document))
+        self.assertNotIn("traceback line", printed.getvalue(), "the job log never carries it")
+
+    def test_a_passing_outcome_file_is_unchanged(self) -> None:
+        sha = self.declare({"schema_version": "1", "commands": [{"name": "unit", "run": "echo fine"}]})
+        out = os.path.join(self._tmp.name, "smoke.json")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(smoke.main(["--repo-root", self.repo.root, "--expected-sha", sha, "--out", out]), 0)
+        document = json.loads(pathlib.Path(out).read_text(encoding="utf-8"))
+        self.assertNotIn("failure_output", document)
+
+    def test_a_passing_run_with_a_failed_best_effort_step_is_unchanged(self) -> None:
+        """The floor's ruff install is best effort: it can fail inside a PASS."""
+        sha = self.declare({"schema_version": "1", "commands": [{"name": "unit", "run": "true"}]})
+        real = smoke.run_smoke
+
+        def passing_with_a_kept_failure(*args, failure_output=None, **kwargs):
+            result = real(*args, failure_output=failure_output, **kwargs)
+            failure_output.append({"check": "setup:install-ruff", "exit": 1, "stdout": "", "stderr": "offline"})
+            return result
+
+        out = os.path.join(self._tmp.name, "smoke.json")
+        with mock.patch.object(smoke, "run_smoke", passing_with_a_kept_failure), \
+                contextlib.redirect_stdout(io.StringIO()) as printed:
+            rc = smoke.main(["--repo-root", self.repo.root, "--expected-sha", sha, "--out", out])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("failure_output", json.loads(pathlib.Path(out).read_text(encoding="utf-8")))
+        self.assertNotIn("failure_output", printed.getvalue())
+
+    def test_the_breaker_decides_the_same_with_or_without_it(self) -> None:
+        import revert_controller
+        sha = self.declare({"schema_version": "1", "commands": [{"name": "unit", "run": "echo x; exit 2"}]})
+        kept = []
+        result = smoke.run_smoke(self.repo.root, sha, failure_output=kept)
+        with_output = {**result, "failure_output": kept}
+        before = "0" * 40
+        plain = revert_controller.decide(result, result, result, sha, before, self.repo.root)
+        carried = revert_controller.decide(with_output, with_output, with_output, sha, before, self.repo.root)
+        self.assertEqual(plain, carried)
+        self.assertNotIn("failure_output", json.dumps(carried))
+
+    def test_the_cut_never_exposes_a_shape_it_made(self) -> None:
+        token = "ghp_" + "A1b2" * 11
+        tail = smoke.FAILURE_OUTPUT_TAIL_CHARS
+        joined = "H" * smoke.FAILURE_OUTPUT_HEAD_CHARS + "m" * 999 + "z" + token + " " + "t" * (tail - len(token) - 1)
+        self.assertIn("z" + token, joined, "before the cut no word boundary precedes the token")
+        self.assertNotIn(token, smoke.bounded_output(joined))
+
+
 def _outcome(sha, checks, source="floor:python+declared"):
     """An outcome document shaped exactly as `run_smoke` writes one."""
     result = smoke.classify(checks)
@@ -804,6 +1041,45 @@ class AdoptionContractTestCase(unittest.TestCase):
         for name, job in self.workflow["jobs"].items():
             if "secrets." in self.yaml.dump(job):
                 self.assertEqual(name, "auto-revert")
+
+    SMOKE_JOBS = ("main-smoke", "confirm", "parent-smoke")
+
+    def test_each_smoke_job_fetches_declared_history_and_keeps_no_credential(self) -> None:
+        for name in self.SMOKE_JOBS:
+            with self.subTest(job=name):
+                steps = self.workflow["jobs"][name]["steps"]
+                names = [s.get("name") for s in steps]
+                lock = next(i for i, s in enumerate(steps) if "chmod -R a-w policy" in (s.get("run") or ""))
+                read = next(i for i, s in enumerate(steps) if s.get("id") == "history")
+                fetch = read + 1
+                smoke_at = next(i for i, s in enumerate(steps)
+                                if "main_smoke.py" in (s.get("run") or "") and "--declared-history"
+                                not in s["run"])
+                self.assertLess(lock, read, names)
+                self.assertLess(fetch, smoke_at, names)
+                self.assertIn("--declared-history", steps[read]["run"])
+                deepen = steps[fetch]
+                self.assertEqual(deepen["if"], "steps.history.outputs.history == 'full'")
+                self.assertTrue(deepen["uses"].startswith("actions/checkout@"))
+                self.assertEqual(deepen["uses"], steps[0]["uses"])
+                self.assertEqual(deepen["with"]["fetch-depth"], 0)
+                self.assertIs(deepen["with"]["persist-credentials"], False)
+                self.assertEqual(deepen["with"]["path"], "repo")
+                self.assertEqual(deepen["with"]["ref"], steps[0]["with"]["ref"],
+                                 "the history must be the history of the commit under test")
+                self.assertEqual(steps[0]["with"]["fetch-depth"], 1, "shallow stays the default")
+
+    def test_a_failed_fetch_still_reaches_the_typed_smoke(self) -> None:
+        for name in self.SMOKE_JOBS:
+            with self.subTest(job=name):
+                steps = self.workflow["jobs"][name]["steps"]
+                read = next(i for i, s in enumerate(steps) if s.get("id") == "history")
+                self.assertIs(steps[read + 1].get("continue-on-error"), True)
+
+    def test_no_new_artifact_or_step_output_carries_command_output(self) -> None:
+        dumped = self.yaml.dump(self.workflow)
+        self.assertNotIn("failure-output", dumped)
+        self.assertNotIn("failure_output", dumped)
 
 
 if __name__ == "__main__":

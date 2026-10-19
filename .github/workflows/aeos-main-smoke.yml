@@ -97,6 +97,33 @@ jobs:
         # one route by which repository content could become policy code that a
         # later lazy import executes.
         run: chmod -R a-w policy
+      - name: Read the history the repository declares
+        # Trusted code reads the declaration at the SHA from the shallow
+        # checkout; nothing the repository runs has run yet.
+        id: history
+        env:
+          AEOS_SHA: ${{ github.sha }}
+          PYTHONSAFEPATH: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_SHA" \
+            --declared-history >> "$GITHUB_OUTPUT" || true
+      - name: Fetch the full history it declares (no credential is kept)
+        # Unshallows the same checkout with the job's read token, which the
+        # action removes again before anything else runs. If the history is
+        # still missing, or a credential was left behind, the smoke types it
+        # (HISTORY_UNAVAILABLE, CHECKOUT_CREDENTIAL_KEPT) and runs nothing.
+        if: steps.history.outputs.history == 'full'
+        # A failed fetch must still reach the smoke, which then types it rather
+        # than the job ending with no outcome at all.
+        continue-on-error: true
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+          show-progress: false
       - name: Honour a repository Python pin, if it has one
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -199,6 +226,33 @@ jobs:
         # one route by which repository content could become policy code that a
         # later lazy import executes.
         run: chmod -R a-w policy
+      - name: Read the history the repository declares
+        # Trusted code reads the declaration at the SHA from the shallow
+        # checkout; nothing the repository runs has run yet.
+        id: history
+        env:
+          AEOS_SHA: ${{ github.sha }}
+          PYTHONSAFEPATH: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_SHA" \
+            --declared-history >> "$GITHUB_OUTPUT" || true
+      - name: Fetch the full history it declares (no credential is kept)
+        # Unshallows the same checkout with the job's read token, which the
+        # action removes again before anything else runs. If the history is
+        # still missing, or a credential was left behind, the smoke types it
+        # (HISTORY_UNAVAILABLE, CHECKOUT_CREDENTIAL_KEPT) and runs nothing.
+        if: steps.history.outputs.history == 'full'
+        # A failed fetch must still reach the smoke, which then types it rather
+        # than the job ending with no outcome at all.
+        continue-on-error: true
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+          show-progress: false
       - name: Honour a repository Python pin, if it has one
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -261,6 +315,33 @@ jobs:
         # one route by which repository content could become policy code that a
         # later lazy import executes.
         run: chmod -R a-w policy
+      - name: Read the history the repository declares
+        # Trusted code reads the declaration at the SHA from the shallow
+        # checkout; nothing the repository runs has run yet.
+        id: history
+        env:
+          AEOS_BEFORE: ${{ github.event.before }}
+          PYTHONSAFEPATH: "1"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 policy/aeos/main_smoke.py --repo-root repo --expected-sha "$AEOS_BEFORE" \
+            --declared-history >> "$GITHUB_OUTPUT" || true
+      - name: Fetch the full history it declares (no credential is kept)
+        # Unshallows the same checkout with the job's read token, which the
+        # action removes again before anything else runs. If the history is
+        # still missing, or a credential was left behind, the smoke types it
+        # (HISTORY_UNAVAILABLE, CHECKOUT_CREDENTIAL_KEPT) and runs nothing.
+        if: steps.history.outputs.history == 'full'
+        # A failed fetch must still reach the smoke, which then types it rather
+        # than the job ending with no outcome at all.
+        continue-on-error: true
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.before }}
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+          show-progress: false
       - name: Honour a repository Python pin, if it has one
         if: hashFiles('repo/.python-version') != ''
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0

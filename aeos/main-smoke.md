@@ -180,9 +180,43 @@ steps only. You should not need `env -u` anything.
   opposite. Say plainly what it gives up: the repository keeps only the commands
   it declares, so a syntax error or an undefined name in a file no declared
   command imports will not be caught here.
+- `"history": "full"` asks for every commit the merged SHA reaches, for a
+  repository whose own checks replay recorded history: a test that reads a
+  recorded commit cannot run in a checkout holding only the merged one. The
+  default, `"shallow"`, is the merged commit alone. Each smoke job (first,
+  confirm and parent) reads the declaration at its own SHA from the shallow
+  checkout and then unshallows that checkout with the job's read token, which
+  the checkout action removes again before anything runs — no credential is
+  kept. A failed fetch does not end the job: the smoke still runs and decides.
+  If a declared full history is still shallow when the checks would run, the
+  run stops at a `history` check typed `HISTORY_UNAVAILABLE`, an
+  `INFRA_UNAVAILABLE`: otherwise the checks that read history would fail for
+  want of it, and that would read as the code's failure. If the checkout's own
+  configuration still holds a credential route (an `extraheader` or an
+  `includeIf`), it stops the same way as `CHECKOUT_CREDENTIAL_KEPT`, and no
+  repository command runs. Exact values only, like `language_floor`.
 - The file is **control plane**, on both sides. The merge gate refuses a pull
   request that changes it, and the breaker never auto-reverts a commit that
   touched it — a rail that can revert its own configuration can disable itself.
+
+### Why a command failed
+
+The outcome says *which* declared command failed and its exit code, never what
+it printed: output carries timestamps and temporary paths, and in a signature
+those would make two runs of one commit disagree. So each smoke run (first,
+confirm and parent) keeps every failing command's own output **beside** the
+outcome, in the outcome file's `failure_output` list: the check id, the exit
+code, and its stdout and stderr. Each stream keeps its first 8,192 and last
+4,096 characters, which hold the first traceback and the summary. The merge
+gate's credential shapes are redacted before the cut and again after it, and a
+private key goes as a whole block, through its END line or, unterminated, to
+the end of the stream. A passing run's file has no such key.
+
+No check, outcome, signature or breaker decision reads it, and the job log never
+carries it, where a command's text could be read as a workflow command. It
+travels in the per-SHA outcome artifacts that already exist, so reading why a
+run failed needs nothing beyond what reads the outcome. No smoke command holds a
+credential to print; the redaction is the second lock on that door.
 
 ## The circuit breaker
 
