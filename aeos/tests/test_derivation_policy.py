@@ -547,6 +547,173 @@ class DerivationPolicyTestCase(unittest.TestCase):
         head = self.repo.commit("add an orphan under the allowlist")
         self.assertEqual(self.evaluate(head), [])
 
+    # -- agent-toolkit #3052: the closure is bounded along allowlisted modules only --
+    def test_allowlisted_module_reached_only_through_an_unprotected_helper_is_not_protected(self) -> None:
+        # The root reaches helpers/util.py (outside the allowlist), and util imports an allowlisted module. Util
+        # runs first in the same process and an ordinary change to it can already do anything a change behind it
+        # could, so the module behind it is in the full closure but not bounded, and changing it is ordinary code.
+        self.repo.write("scripts/helpers/util.py", "import agent_relay.behind\nZ = 3\n")
+        self.repo.write("scripts/agent_relay/behind.py", "B = 1\n")
+        # Control: the same depth along allowlisted modules only stays bounded.
+        self.repo.write("scripts/agent_relay/models.py", "import agent_relay.deep\nX = 1\n")
+        self.repo.write("scripts/agent_relay/deep.py", "D = 1\n")
+        self.repo.base = self.repo.commit("a chain through an unprotected helper, and one that is not")
+        self.write_policy(not_after=FAR_FUTURE, members=EXPECTED_BOUNDED | {"scripts/agent_relay/deep.py"})
+        full, bounded = dp.regenerate_closure(self.repo.root, self.repo.base, self.policy())
+        self.assertIn("scripts/agent_relay/behind.py", full)
+        self.assertNotIn("scripts/agent_relay/behind.py", bounded)
+        self.assertEqual(bounded, EXPECTED_BOUNDED | {"scripts/agent_relay/deep.py"})
+        self.repo.write("scripts/agent_relay/behind.py", "B = 2\n")
+        head = self.repo.commit("change the module behind the helper, unsigned")
+        self.assertEqual(self.evaluate(head), [])
+        self.repo.write("scripts/agent_relay/deep.py", "D = 2\n")
+        head = self.repo.commit("change the module on the allowlisted chain, unsigned")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        protected, drift = dp.candidate_protected_set(self.repo.root, self.repo.base, head, self.policy())
+        self.assertIsNone(drift)
+        self.assertIn("scripts/agent_relay/deep.py", protected)
+        self.assertNotIn("scripts/agent_relay/behind.py", protected)
+
+    def test_one_allowlisted_chain_protects_a_module_a_helper_reaches_first(self) -> None:
+        # The walk meets agent_relay/x.py through the helper one level before the allowlisted chain reaches it.
+        # Every edge is kept, so the later allowlisted edge still bounds it.
+        self.repo.write("scripts/helpers/util.py", "import agent_relay.x\nZ = 3\n")
+        self.repo.write("scripts/agent_relay/models.py", "import agent_relay.mid\nX = 1\n")
+        self.repo.write("scripts/agent_relay/mid.py", "import agent_relay.x\n")
+        self.repo.write("scripts/agent_relay/x.py", "V = 1\n")
+        self.repo.base = self.repo.commit("x behind a helper and behind an allowlisted chain")
+        _full, bounded = dp.regenerate_closure(self.repo.root, self.repo.base, self.policy())
+        self.assertTrue({"scripts/agent_relay/mid.py", "scripts/agent_relay/x.py"} <= bounded)
+
+    def test_inserting_an_unprotected_shim_cannot_unprotect_the_module_behind_it(self) -> None:
+        # Moving a protected module behind a new unprotected shim needs the root's own edit, which is protected,
+        # and the module stays protected for that change because the merge-base closure still bounds it.
+        self.repo.write("scripts/helpers/shim.py", "import agent_relay.models\n")
+        self.repo.write(Repo.ROOT, "import helpers.shim\nfrom commission_train import authority\n"
+                                   "def lazy():\n    from .validate import check  # noqa\n    import helpers.util\n")
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("route the root through an unprotected shim and change the module behind it")
+        protected, drift = dp.candidate_protected_set(self.repo.root, self.repo.base, head, self.policy())
+        self.assertIsNone(drift)
+        self.assertTrue({Repo.ROOT, "scripts/agent_relay/models.py"} <= protected)
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        self.assertIn("2 protected path(s) changed", findings[0][2])
+
+    def test_a_package_beside_a_protected_module_is_what_python_runs_and_is_protected(self) -> None:
+        # CPython's path finder loads agent_relay/models/__init__.py, not agent_relay/models.py, once both exist.
+        self.repo.write("scripts/agent_relay/models/__init__.py", "X = 'shadow'\n")
+        head = self.repo.commit("shadow a protected module with a same-named package")
+        findings = self.evaluate(head)
+        self.assertEqual(self.codes(findings), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        manifest = self.manifest_for(head, sign_it=False)
+        self.assertIn("scripts/agent_relay/models/__init__.py", [e["path"] for e in json.loads(manifest)["entries"]])
+
+    def test_a_package_beside_a_root_nothing_imports_is_protected(self) -> None:
+        # The root is launched, not imported, so no edge reaches standing_authority/__init__.py; `python -m` would
+        # still run it in the root's place.
+        self.repo.write("scripts/agent_relay/standing_authority/__init__.py", "SHADOW = True\n")
+        head = self.repo.commit("shadow a root nothing imports")
+        self.assertEqual(self.codes(self.evaluate(head)), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+        manifest = self.manifest_for(head, sign_it=False)
+        self.assertEqual([e["path"] for e in json.loads(manifest)["entries"]],
+                         ["scripts/agent_relay/standing_authority/__init__.py"])
+
+    def test_a_package_beside_an_exact_allowlisted_module_is_allowlisted_and_protected(self) -> None:
+        self.repo.write("scripts/naming.py", "def valid(n):\n    return True\n")
+        self.repo.base = self.repo.commit("an exact allowlisted root at the top of scripts/")
+        document = self.policy_document(not_after=FAR_FUTURE)
+        document["derivation_policy"]["roots"].append("scripts/naming.py")
+        document["derivation_policy"]["allowlist_files"] = ["scripts/naming.py"]
+        document["derivation_policy"]["members"] = sorted(EXPECTED_BOUNDED | {"scripts/naming.py"})
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        self.assertTrue(self.policy().in_allowlist("scripts/naming/__init__.py"))
+        self.assertFalse(self.policy().in_allowlist("scripts/naming_extra.py"))
+        self.repo.write("scripts/naming/__init__.py", "def valid(n):\n    return True\n")
+        head = self.repo.commit("shadow the exact allowlisted root with a package")
+        self.assertEqual(self.codes(self.evaluate(head)), [dp.DERIVATION_POLICY_DIFF_UNSIGNED])
+
+    def test_an_inert_module_file_does_not_hide_a_protected_package(self) -> None:
+        # scripts/commission_train.py is outside the allowlist, so adding it is inert; it must not make the walk
+        # read it in place of the package Python actually imports, which would drop that package from the set.
+        self.repo.write("scripts/commission_train.py", "C = 1\n")
+        head = self.repo.commit("add a top-level module named like a protected package")
+        self.assertEqual(self.evaluate(head), [])
+        _full, bounded = dp.regenerate_closure(self.repo.root, head, self.policy())
+        self.assertIn("scripts/commission_train/__init__.py", bounded)
+
+    def test_a_module_that_enters_the_protected_set_unchanged_is_an_entered_entry(self) -> None:
+        # unrelated.py is allowlisted but outside the closure, so an ordinary change may edit it. A later protected
+        # change that imports it must answer for the bytes it already has, not only for its own edit.
+        self.repo.write("scripts/agent_relay/unrelated.py", "Y = 'planted while ordinary'\n")
+        self.repo.base = self.repo.commit("an ordinary change to an unprotected allowlisted module")
+        self.repo.write("scripts/agent_relay/models.py", "import agent_relay.unrelated\nX = 1\n")
+        head = self.repo.commit("a protected module starts importing it")
+        protected, entering, drift = dp.candidate_protected_sets(self.repo.root, self.repo.base, head, self.policy())
+        self.assertIsNone(drift)
+        self.assertEqual(entering, {"scripts/agent_relay/unrelated.py"})
+        manifest = self.manifest_for(head)
+        entries = {e["path"]: e for e in json.loads(manifest)["entries"]}
+        self.assertEqual(set(entries), {"scripts/agent_relay/models.py", "scripts/agent_relay/unrelated.py"})
+        planted = hashlib.sha256(b"Y = 'planted while ordinary'\n").hexdigest()
+        self.assertEqual(entries["scripts/agent_relay/unrelated.py"],
+                         {"path": "scripts/agent_relay/unrelated.py", "status": "entered",
+                          "pre_sha256": planted, "post_sha256": planted})
+        head = self.repo.commit("sign the manifest that names the entered module")
+        self.assertEqual(self.evaluate(head), [])
+
+    def test_an_entering_module_a_diff_does_not_show_whole_is_marked_unseen(self) -> None:
+        # Review round 3: an edit or a rename from an unprotected path leaves the planted bytes out of the diff an
+        # approver reads; only a whole addition, or a rename of a path already protected, shows them.
+        self.repo.write("scripts/agent_relay/unrelated.py", "Y = 'planted while ordinary'\n")
+        self.repo.base = self.repo.commit("an ordinary change to an unprotected allowlisted module")
+
+        def unseen(head):
+            protected, entering, _drift = dp.candidate_protected_sets(self.repo.root, self.repo.base, head, self.policy())
+            entries = dp.candidate_entries(self.repo.root, self.repo.base, head, protected, entering)
+            return {e.path: (e.status, e.unseen) for e in entries}
+
+        self.repo.write("scripts/agent_relay/models.py", "import agent_relay.unrelated\nX = 1\n")
+        self.repo.write("scripts/agent_relay/unrelated.py", "Y = 'planted while ordinary'\n# reviewed\n")
+        edited = self.repo.commit("import it and add one line to it")
+        self.assertEqual(unseen(edited), {"scripts/agent_relay/models.py": ("modified", False),
+                                          "scripts/agent_relay/unrelated.py": ("modified", True)})
+        self.repo.write("scripts/agent_relay/unrelated.py", "Y = 'planted while ordinary'\n")
+        self.repo.move("scripts/agent_relay/unrelated.py", "scripts/agent_relay/unrelated_v2.py")
+        self.repo.write("scripts/agent_relay/models.py", "import agent_relay.unrelated_v2\nX = 1\n")
+        moved = self.repo.commit("rename it and import the new name")
+        self.assertEqual(unseen(moved)["scripts/agent_relay/unrelated_v2.py"], ("renamed", True))
+        # controls: a module added whole, and a protected module renamed, are shown by their diff
+        self.repo.write("scripts/agent_relay/fresh.py", "F = 1\n")
+        self.repo.write("scripts/agent_relay/models.py", "import agent_relay.unrelated_v2\nimport agent_relay.fresh\nX = 1\n")
+        added = self.repo.commit("also import a module added whole")
+        self.assertEqual(unseen(added)["scripts/agent_relay/fresh.py"], ("added", False))
+
+    def test_renaming_a_protected_module_is_not_unseen(self) -> None:
+        self.repo.move("scripts/agent_relay/validate.py", "scripts/agent_relay/validator.py")
+        self.repo.write(Repo.ROOT, self.repo_root_source_importing("agent_relay.validator").replace(
+            "from .validate import check", "from .validator import check"))
+        head = self.repo.commit("rename a protected module and follow the import")
+        protected, entering, _drift = dp.candidate_protected_sets(self.repo.root, self.repo.base, head, self.policy())
+        entries = {e.path: e for e in dp.candidate_entries(self.repo.root, self.repo.base, head, protected, entering)}
+        self.assertEqual(entries["scripts/agent_relay/validator.py"].status, "renamed")
+        self.assertEqual(entries["scripts/agent_relay/validator.py"].rename_from, "scripts/agent_relay/validate.py")
+        self.assertFalse(entries["scripts/agent_relay/validator.py"].unseen)
+
+    def test_a_module_already_protected_at_the_base_is_not_entered(self) -> None:
+        # validate.py is in the base closure but not yet in the committed list (growth, A4): it was protected
+        # before this candidate, so the candidate's manifest names only what it changes.
+        self.write_policy(not_after=FAR_FUTURE, members=EXPECTED_BOUNDED - {"scripts/agent_relay/validate.py"})
+        self.repo.write("scripts/agent_relay/models.py", "X = 2\n")
+        head = self.repo.commit("modify a member while another is uncommitted growth")
+        _protected, entering, drift = dp.candidate_protected_sets(self.repo.root, self.repo.base, head, self.policy())
+        self.assertIsNone(drift)
+        self.assertEqual(entering, frozenset())
+        manifest = self.manifest_for(head, sign_it=False)
+        self.assertEqual([e["path"] for e in json.loads(manifest)["entries"]], ["scripts/agent_relay/models.py"])
+
     def test_deleting_a_declared_root_is_drift_at_the_head(self) -> None:
         self.repo.remove(Repo.ROOT)
         head = self.repo.commit("delete a root")
@@ -1104,6 +1271,15 @@ class DerivationPolicyTestCase(unittest.TestCase):
         findings = self.route(head, self.evidence(body=self.programme_body(envelope=["scripts/agent_relay/"])))
         self.assertIn(dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE, findings[0][2])
         self.assertEqual(self.route(head, self.evidence(body=self.programme_body(envelope=["scripts/agent_relay/", Repo.ROOT]))), [])
+
+    def test_a_package_that_would_replace_a_root_needs_an_exact_envelope_entry(self) -> None:
+        self.write_machine_policy()
+        shadow = "scripts/agent_relay/standing_authority/__init__.py"
+        self.repo.write(shadow, "def check(x):\n    return True\n")
+        head = self.repo.commit("shadow the derivation root")
+        findings = self.route(head, self.evidence(body=self.programme_body(envelope=["scripts/agent_relay/"])))
+        self.assertIn(dp.MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE, findings[0][2])
+        self.assertEqual(self.route(head, self.evidence(body=self.programme_body(envelope=[shadow]))), [])
 
     def test_evidence_inside_the_candidate_tree_is_refused(self) -> None:
         # Review F8: evidence is the workflow's, never the candidate's.

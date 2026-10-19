@@ -132,6 +132,27 @@ POLICY_SELF_PREFIXES = ("aeos/",)
 without this, a pull request could rewrite the code that governs every other
 repository and be waved through by the very gate it is rewriting."""
 
+POLICY_SELF_ORDINARY_SUFFIX = ".md"
+"""The one part of ``aeos/`` that no workflow runs, the gate never reads and nothing imports:
+its prose, a Markdown file directly in ``aeos/`` (agent-toolkit #3052, 2026-10-19). A change
+confined to it is judged on its content like any other file and merges without the operator.
+Everything else under ``aeos/`` stays control plane, a new file or directory included: the
+judge puts ``aeos/`` first on its import path, so a new module or package there could stand in
+for one it imports, and the tests are the evidence an operator reads when he approves a
+change to the judge, which nothing re-runs after a merge. The gate diffs with ``--no-renames``,
+so moving a control-plane file into prose still deletes a control-plane path."""
+
+POLICY_ATTRIBUTES_NAME = ".gitattributes"
+"""In this repository an attributes file anywhere is control plane: one at the root or in
+``aeos/`` rewrites the checked-out bytes of the judge in every trusted checkout (end-of-line
+and encoding rules), including the smoke step that holds the revert credential."""
+
+
+def _policy_self_ordinary(path: str) -> bool:
+    lowered = path.lower()
+    return (lowered.startswith(POLICY_SELF_PREFIXES) and lowered.count("/") == 1
+            and lowered.endswith(POLICY_SELF_ORDINARY_SUFFIX))
+
 # --------------------------------------------------------------------------
 # Budgets and caps
 # --------------------------------------------------------------------------
@@ -520,17 +541,17 @@ def history_objects(candidate_dir: str, base_sha: str, head_sha: str) -> list[tu
 # Checks
 # --------------------------------------------------------------------------
 def control_plane_violations(paths: list[str], repository: str) -> list[str]:
-    prefixes = list(CONTROL_PLANE_PREFIXES)
-    if (repository or "").strip().lower() == POLICY_REPOSITORY:
-        prefixes.extend(POLICY_SELF_PREFIXES)
+    policy_repository = (repository or "").strip().lower() == POLICY_REPOSITORY
     # Case-insensitive: matching only the exact lowercase spelling would let a
     # differently-cased path slip past a rule that exists to be unskippable.
     return sorted(
         {
             p
             for p in paths
-            if any(p.lower().startswith(pre) for pre in prefixes)
+            if any(p.lower().startswith(pre) for pre in CONTROL_PLANE_PREFIXES)
             or p.lower() in CONTROL_PLANE_PATHS
+            or (policy_repository and p.lower().startswith(POLICY_SELF_PREFIXES) and not _policy_self_ordinary(p))
+            or (policy_repository and p.lower().rsplit("/", 1)[-1] == POLICY_ATTRIBUTES_NAME)
         }
     )
 

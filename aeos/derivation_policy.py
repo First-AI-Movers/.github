@@ -17,9 +17,14 @@ a process holding the shared node credential could widen the validators that rea
 its own authority through an ordinary auto-squashed pull request.
 
 The protected set is a **generated, bounded member list** committed here: the
-first-party import closure of the named roots under ``scripts/`` (whole AST, so a
-lazy in-function import counts; package ``__init__.py`` modules count because
-they execute on import), intersected with an explicit allowlist. The gate
+modules the named roots under ``scripts/`` reach through first-party imports
+(whole AST, so a lazy in-function import counts; package ``__init__.py`` modules
+count because they execute on import) along chains made only of allowlisted
+modules. A module reached only through an unprotected module is not a member: the
+validators live on the protected chains, and the unprotected module in front of it is
+already ordinary code (agent-toolkit #3052). A module that enters the set at the
+candidate head without changing is an ``entered`` entry, so its existing bytes are
+answered for too. The gate
 regenerates that set from the *base* commit on every evaluation and refuses when
 the committed list has drifted, so the list is never stale and never hand-kept.
 The gate regenerates the same closure at the *candidate head* as well, and the
@@ -248,9 +253,20 @@ class Policy:
         return path in self.members
 
     def in_allowlist(self, path: str) -> bool:
-        return path in self.allowlist_files or any(
-            path.startswith(prefix) for prefix in self.allowlist_prefixes
-        )
+        # An exact allowlisted module's same-named package directory is allowlisted too: CPython imports
+        # ``x/__init__.py`` in place of ``x.py`` once it exists (agent-toolkit #3052).
+        return (path in self.allowlist_files
+                or any(path.startswith(prefix) for prefix in self.allowlist_prefixes)
+                or any(path.startswith(_package_dir(f)) for f in self.allowlist_files if f.endswith(PYTHON_SUFFIX)))
+
+    def root_or_shadow(self, path: str) -> bool:
+        """A declared root, or a path inside the package directory that would replace it."""
+        return path in self.roots or any(path.startswith(_package_dir(r)) for r in self.roots)
+
+
+def _package_dir(module_path: str) -> str:
+    """``scripts/a/b.py`` -> ``scripts/a/b/``: the directory whose ``__init__`` CPython imports in its place."""
+    return module_path[: -len(PYTHON_SUFFIX)] + "/"
 
 
 def _parse_not_after(value, label: str):
@@ -507,14 +523,17 @@ def _package_inits_of(path: str, files: dict[str, str]) -> list[str]:
 
 def _resolve(module_id: str, files: dict[str, str]) -> str | None:
     """A dotted module id to its file under ``scripts/``, or ``None`` for a
-    standard-library, third-party or absent module."""
+    standard-library, third-party or absent module. A package wins over a
+    same-named module file, as in CPython's path finder: otherwise a new
+    ``x/__init__.py`` beside a protected ``x.py`` would be what Python runs while
+    the walk kept reading ``x.py`` (agent-toolkit #3052)."""
     if not module_id:
         return None
     base = SCRIPTS_ROOT + module_id.replace(".", "/")
-    if base + PYTHON_SUFFIX in files:
-        return base + PYTHON_SUFFIX
     if base + "/__init__.py" in files:
         return base + "/__init__.py"
+    if base + PYTHON_SUFFIX in files:
+        return base + PYTHON_SUFFIX
     return None
 
 
@@ -550,7 +569,13 @@ def _imports_of(tree: ast.AST, module_id: str, is_package: bool) -> set[str]:
 
 
 def regenerate_closure(candidate_dir: str, commit: str, policy: Policy) -> tuple[set[str], set[str]]:
-    """``(full closure, bounded members)`` at ``commit``, from blobs read as data."""
+    """``(full closure, bounded members)`` at ``commit``, from blobs read as data.
+
+    ``full`` is the whole first-party import closure of the roots. ``bounded`` is the part of it a root reaches
+    along an import chain made ONLY of allowlisted modules (agent-toolkit #3052, 2026-10-19). A module reached only
+    through an unprotected module is not bounded: the validator classes this conjunct exists for live on the
+    protected chains, and the unprotected module in front of it is already ordinary code, so its protection
+    reviewed no validator. A root outside the allowlist is itself unprotected, so nothing is bounded behind it."""
     files = tree_paths(candidate_dir, commit, SCRIPTS_ROOT)
     pending: list[str] = []
     for root in policy.roots:
@@ -563,6 +588,8 @@ def regenerate_closure(candidate_dir: str, commit: str, policy: Policy) -> tuple
         # every ancestor package initializer first: seed those that exist at this
         # commit, so that adding one at the head lands in the protected set.
         pending.extend(_package_inits_of(root, files))
+    seeds = list(pending)
+    edges: dict[str, set[str]] = {}
     seen: set[str] = set()
     while pending:
         if len(seen) > MAX_CLOSURE_MODULES:
@@ -584,11 +611,20 @@ def regenerate_closure(candidate_dir: str, commit: str, policy: Policy) -> tuple
                     DERIVATION_POLICY_DRIFT, path, f"protected module does not parse at {commit[:12]}: {type(exc).__name__}"
                 )
             module_id = _module_id(path) or ""
+            targets = edges.setdefault(path, set())
             for imported in _imports_of(tree, module_id, path.endswith("/__init__.py")):
                 target = _resolve(imported, files)
-                if target and target not in seen:
-                    pending.append(target)
-    bounded = {p for p in seen if policy.in_allowlist(p)}
+                if target:
+                    targets.add(target)
+                    if target not in seen:
+                        pending.append(target)
+    bounded: set[str] = set()
+    chain = [p for p in seeds if policy.in_allowlist(p)]
+    while chain:
+        path = chain.pop()
+        if path not in bounded:
+            bounded.add(path)
+            chain.extend(t for t in edges.get(path, ()) if t not in bounded and policy.in_allowlist(t))
     return seen, bounded
 
 
@@ -600,7 +636,7 @@ class Entry:
     fields are SHA-256 hex digests of the file bytes (never git object ids) or
     ``absent``."""
 
-    __slots__ = ("path", "status", "pre_sha256", "post_sha256", "rename_from", "pre_mode", "post_mode")
+    __slots__ = ("path", "status", "pre_sha256", "post_sha256", "rename_from", "pre_mode", "post_mode", "unseen")
 
     def __init__(
         self, path: str, status: str, pre_sha256: str, post_sha256: str, rename_from: str | None,
@@ -616,6 +652,10 @@ class Entry:
         # bytes are unchanged.
         self.pre_mode = pre_mode
         self.post_mode = post_mode
+        # True when this path enters the protected set at the head with bytes a diff of the change does not show
+        # (agent-toolkit #3052): set by ``candidate_entries``, read by the approval route, and like the modes NOT
+        # part of ``as_dict``.
+        self.unseen = False
 
     def as_dict(self) -> dict:
         record = {
@@ -777,6 +817,14 @@ def canonical_manifest(repository: str, base: str, entries: list[Entry]) -> byte
 def candidate_protected_set(
     candidate_dir: str, base: str, head: str, policy: Policy
 ) -> tuple[frozenset[str], tuple[str, str, str] | None]:
+    """``(protected, drift_finding)`` of :func:`candidate_protected_sets`, for callers that need only the union."""
+    protected, _entering, drift = candidate_protected_sets(candidate_dir, base, head, policy)
+    return protected, drift
+
+
+def candidate_protected_sets(
+    candidate_dir: str, base: str, head: str, policy: Policy
+) -> tuple[frozenset[str], frozenset[str], tuple[str, str, str] | None]:
     """The set of paths a candidate must sign: the committed members, the closure
     regenerated at the merge base, and the closure regenerated at the head (so a
     helper the candidate adds and imports is protected in the same change).
@@ -785,7 +833,12 @@ def candidate_protected_set(
     refusing it would add no protection and would strand every candidate until the
     list is refreshed. The drift finding is set only when a committed member is no
     longer in the base closure, which is also what refuses a candidate whose merge
-    base predates members the list has since committed."""
+    base predates members the list has since committed.
+
+    Returns ``(protected, entering, drift_finding)``. ``entering`` is what the head
+    protects and the base did not: a module a candidate starts importing along a
+    protected chain. Its bytes were written while it was ordinary code, so the
+    candidate answers for them even where it does not change them (#3052)."""
     _full, at_base = regenerate_closure(candidate_dir, base, policy)
     drift = None
     departed = policy.members - at_base
@@ -797,15 +850,63 @@ def candidate_protected_set(
             f"{base[:12]}: {sorted(departed)[:6]}",
         )
     _full, at_head = regenerate_closure(candidate_dir, head, policy)
-    return frozenset(policy.members | at_base | at_head), drift
+    return frozenset(policy.members | at_base | at_head), frozenset(at_head - at_base - policy.members), drift
+
+
+def candidate_entries(
+    candidate_dir: str, base: str, head: str, protected, entering, changes: list[_Change] | None = None
+) -> list[Entry]:
+    """The protected diff, plus one ``entered`` entry for each path that enters the
+    protected set at the head without changing: both images are the bytes it
+    already had, so a signature, an envelope or a grant must name it like any
+    changed member."""
+    if changes is None:
+        changes = raw_diff(candidate_dir, base, head)
+    # A package directory beside a protected module file replaces it at import, so whatever changes inside it
+    # is protected too, whether or not anything imports the module by name (a root launched with ``-m``).
+    shadowed = tuple(_package_dir(p) for p in protected if p.endswith(PYTHON_SUFFIX) and not p.endswith("/__init__.py"))
+    entries = _hash_images(candidate_dir, _select(changes, lambda p: p in protected or p.startswith(shadowed)))
+    changed = {p for c in changes for p in (c.old, c.new)}
+    unchanged = sorted(p for p in entering if p not in changed)
+    if not unchanged:
+        return _mark_unseen(entries, protected, entering)
+    modes = {}
+    out = _git(candidate_dir, ["ls-tree", "-z", "--full-tree", _hex(head, "head"), "--", *unchanged])
+    for record in out.split(b"\0"):
+        meta, _, path = record.partition(b"\t")
+        parts = meta.decode("utf-8", "replace").split()
+        if len(parts) == 3 and parts[1] == "blob":
+            modes[os.fsdecode(path)] = (parts[0], parts[2])
+    blobs = read_blobs(candidate_dir, sorted({blob for _mode, blob in modes.values()}))
+    for path in unchanged:
+        if path not in modes or blobs.get(modes[path][1]) is None:
+            raise PolicyError(EVIDENCE_UNREADABLE, path, "an entering protected path could not be read at the head")
+        mode, blob = modes[path]
+        digest = hashlib.sha256(blobs[blob]).hexdigest()
+        entries.append(Entry(path, "entered", digest, digest, None, mode, mode))
+    entries.sort(key=lambda e: e.path)
+    return _mark_unseen(entries, protected, entering)
+
+
+def _mark_unseen(entries: list[Entry], protected, entering) -> list[Entry]:
+    """Mark each entry whose bytes a reviewer of the diff does not see: a path entering the protected set that the
+    change does not add whole. A small edit, a type change or a rename from a path that was not protected leaves the
+    rest of the bytes, written while it was ordinary code, out of the diff; a rename of a path that was already
+    protected does not, because those bytes were already answered for."""
+    before = frozenset(protected) - frozenset(entering)
+    for entry in entries:
+        if entry.path in entering and not (
+                entry.status == "added" or (entry.status == "renamed" and entry.rename_from in before)):
+            entry.unseen = True
+    return entries
 
 
 def expected_manifest(candidate_dir: str, repository: str, base_sha: str, head_sha: str, policy: Policy) -> bytes:
     """The manifest bytes the gate will require for this candidate -- what an
     implementation lane prints for the operator to sign off-node."""
     base = merge_base(candidate_dir, base_sha, head_sha)
-    protected, _drift = candidate_protected_set(candidate_dir, base, head_sha, policy)
-    entries, _touched = protected_diff(candidate_dir, base, head_sha, protected)
+    protected, entering, _drift = candidate_protected_sets(candidate_dir, base, head_sha, policy)
+    entries = candidate_entries(candidate_dir, base, head_sha, protected, entering)
     return canonical_manifest(repository, base, entries)
 
 
@@ -877,6 +978,11 @@ MACHINE_ROUTE_REPOSITORY_MISMATCH = "MACHINE_ROUTE_REPOSITORY_MISMATCH"
 MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE = "MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE"
 MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE = "MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE"
 MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID = "MACHINE_ROUTE_AUTHORITY_COMPILATION_INVALID"
+MACHINE_ROUTE_APPROVAL_ENTERED_NOT_IN_DIFF = "MACHINE_ROUTE_APPROVAL_ENTERED_NOT_IN_DIFF"
+"""An exact-head approval was given on a diff that does not show all the bytes of a module entering the protected
+set: it enters unchanged, edited, retyped or renamed from an unprotected path (agent-toolkit #3052). Carry the module so
+its whole content is in the diff (add it under a new path), or by a route that names it: a programme envelope, a
+scoped grant or the signed manifest."""
 
 
 def load_evidence(path: str | None, *, candidate_dir: str | None = None) -> tuple[dict | None, str | None]:
@@ -1218,12 +1324,18 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
             return scoped_grant.SCOPED_GRANT_DISABLED
         if programme_ref_from_body(pr.get("body", "")) != policy.scoped_grant["programme"]:
             return scoped_grant.SCOPED_GRANT_PROGRAMME_MISMATCH
+        # No grant reaches a root (``scoped_grant``'s envelope rule); a package that would replace one is a root.
+        if any(path is not None and policy.root_or_shadow(path)
+               for entry in entries for path in (entry.path, entry.rename_from)):
+            return scoped_grant.SCOPED_GRANT_ENVELOPE_INVALID
     # #3052 paperwork removal: the operator's approval of exactly this machine-authored head stands in for a
     # programme envelope. It binds one commit, so it is never wider than an envelope. A grant-marked pull
     # request is still judged only by the scoped-grant judge, never by an approval.
     approval = None
     if grant_state == scoped_grant.MARKER_ABSENT and policy.operator_approval is not None:
         approval = operator_approval.refusal(policy, evidence, repository, head_sha or "")
+        if approval is None and any(getattr(entry, "unseen", False) for entry in entries):
+            approval = MACHINE_ROUTE_APPROVAL_ENTERED_NOT_IN_DIFF
         if approval is None:
             if admission is not None:
                 # The pass rests on the approval: the gate job re-reads it before publishing.
@@ -1306,12 +1418,11 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
                 if path is not None and not policy.in_allowlist(path):
                     return MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE
         return None
-    roots = set(policy.roots)
     for entry in entries:
         for path in (entry.path, entry.rename_from):
             if path is None:
                 continue
-            if path in roots:
+            if policy.root_or_shadow(path):
                 if not _within_envelope(path, block["path_envelope"], exact_only=True):
                     return MACHINE_ROUTE_ROOT_NEEDS_EXACT_ENVELOPE
             elif not _within_envelope(path, block["path_envelope"]):
@@ -1351,10 +1462,10 @@ def evaluate_derivation_policy(
     # The protected set for THIS candidate: committed members (drift-checked
     # against the closure at the merge base) plus the closure at the head, so a
     # newly added, newly imported allowlisted helper is signed in the same change.
-    protected, drift = candidate_protected_set(candidate_dir, base, head_sha, policy)
+    protected, entering, drift = candidate_protected_sets(candidate_dir, base, head_sha, policy)
     if drift is not None:
         findings.append(drift)
-    entries, _touched = protected_diff(candidate_dir, base, head_sha, protected, changes)
+    entries = candidate_entries(candidate_dir, base, head_sha, protected, entering, changes)
     if not entries:
         return findings  # allowlisted-but-unprotected change: no signature needed
 
