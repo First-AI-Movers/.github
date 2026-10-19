@@ -1127,6 +1127,53 @@ def is_full_resident_ceiling(block) -> bool:
     return block["posture"] == RESIDENT_POSTURE
 
 
+def _resident_scope_classes(tokens):
+    """The ceiling reader's bounded plural and identity/billing aliases, for scope contradictions."""
+    classes = set()
+    for token in tokens:
+        if token.endswith("ies") and len(token) > 3:
+            token = token[:-3] + "y"
+        elif token.endswith("s") and not token.endswith("ss"):
+            token = token[:-1]
+        classes.update({"identity", "billing", "identity_or_billing"}
+                       if token in {"identity", "billing", "identity_or_billing"} else {token})
+    return classes
+
+
+def served_resident_admits(body, ref, paths) -> bool:
+    """Narrow a grant to a served full resident's existing write authority and OWN envelope.
+
+    Reuses the strict resident class, not the six-field activation parser. Its historical date
+    does not end this class; the activation record's TTL and expiry are still judged separately.
+    Source-prose binding and scope contradictions follow standing_ceiling.parse_v2. Nothing here
+    proves GitHub admission, edit provenance, current generation or claim ownership: the caller does.
+    """
+    block = scoped_grant._fence(body, "standing-authority")
+    if not is_full_resident_ceiling(block):
+        return False
+    if block["state"] != "ACTIVE" or f"{block['repository']}#{block['issue']}" != ref:
+        return False
+    match = _BLOCK_RE.search(body)
+    prose = body[:match.start()] + body[match.end():]
+    if hashlib.sha256(prose.encode()).hexdigest() != block["source_body_sha256"]:
+        return False
+    grants = block["authority"]
+    allowed = _resident_scope_classes(block["scope"]["allowed"])
+    forbidden = _resident_scope_classes(block["scope"]["forbidden"])
+    granted = _resident_scope_classes(k for k, value in grants.items() if value)
+    protected = _resident_scope_classes(("deployment", "infrastructure", "migrations", "secrets",
+                                        "identity_or_billing", "merge", "public_release",
+                                        "external_communication", "legal_commitment"))
+    if (allowed & forbidden or granted & forbidden or not protected <= forbidden):
+        return False
+    if grants.get("repository_write") is not True or "repository_write" not in allowed:
+        return False
+    if (block["execution_mode"] != "modify" or block["max_active_writers"] < 1
+            or block["max_active_child_prs"] < 1):
+        return False
+    return all(_within_envelope(path, block["path_envelope"]) for path in paths)
+
+
 def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | None,
                   repository: str, entries: list[Entry], now: float, head_sha: str | None = None,
                   admission: dict | None = None) -> str | None:
@@ -1252,7 +1299,8 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         # #3052 Class B: a grant-marked pull request (already bound to this programme above) is judged ONLY
         # against that grant's exact files. It never falls back to the compiler's whole allowlist.
         if grant_state != scoped_grant.MARKER_ABSENT:
-            return scoped_grant.judge(policy.scoped_grant, policy, evidence, repository, entries, now)
+            return scoped_grant.judge(policy.scoped_grant, policy, evidence, repository, entries, now,
+                                      resident_admits=served_resident_admits)
         for entry in entries:
             for path in (entry.path, entry.rename_from):
                 if path is not None and not policy.in_allowlist(path):
