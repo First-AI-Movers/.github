@@ -126,7 +126,7 @@ lane, where every ordinary floor still applies *and* these do:
 | `.github/workflows/**`, `.github/actions/**` | no `pull_request_target`; `permissions` declared and never `write-all`; every non-local `uses:` pinned to a 40-hex commit; no author-controlled free text or `secrets.*` interpolated into a `run:` body; no consumer repository publishing the reserved `aeos-merge-ready` path or check name |
 | `.github/aeos-gate.json` | valid schema; no blanket allowlist entry that would exempt the whole repository from secret-shape detection |
 | `.github/aeos-smoke.json` | valid schema; a declared `smoke_suites` / `compile_roots` may not be empty — a rail rewritten to run nothing still reports green |
-| `aeos/**` *(this repository only; not a Markdown file directly in `aeos/`)* | parses; `merge_ready_gate.py` still declares its load-bearing constants, so the gate cannot lose one through an autonomous merge |
+| `aeos/**` *(this repository only; not a Markdown file directly in `aeos/` or a seat-ceilings removal that touches no kept seat)* | parses; `merge_ready_gate.py` still declares its load-bearing constants, so the gate cannot lose one through an autonomous merge |
 
 The allowlist **never** exempts a control-plane path. That conjunct is what keeps
 the gate config a decision rather than a self-serve bypass, and it is now checked
@@ -160,6 +160,57 @@ deletion in a consumer repository merges: the required verdict is injected there
 by the organization ruleset from a repository that branch cannot touch, and
 `.github/aeos-smoke.json` falling away restores the rail's built-in defaults —
 a stricter posture, not a weaker one.
+
+### The protected-decision set
+
+The operator's exact-head approval is for genuine protected decisions only (agent-toolkit #3052,
+operator directive 2026-10-20). In this repository those are:
+
+- **The judge** — every `aeos/*.py`, and any new file or directory under `aeos/`, because the
+  judge puts `aeos/` first on its import path.
+- **Its classification and trust data** — `aeos/standing-governor-policy.json`: roots, allowlist,
+  members, operator principals and signer keys.
+- **The seat ceilings** — `aeos/standing-seat-ceilings.json`, which grants standing seats their
+  authority, except a removal that touches no kept seat (below).
+- **The tests and their vectors** — `aeos/tests/**`. They are executable evidence that runs on
+  whoever runs the suite, the operator's machine with his signing key included, and no static
+  check can rule out a suite that passes without testing anything.
+- **Every workflow and action** — `.github/workflows/**` and `.github/actions/**`: the merge-ready
+  judge, and the main-smoke and revert rail, which holds the revert App's private key.
+- **The gate and smoke configuration** — `.github/aeos-gate.json` and `.github/aeos-smoke.json`,
+  which decide how a check behaves.
+- **Every `.gitattributes`** — it rewrites the judge's checked-out bytes.
+- **Every Python source and the test configuration** — any `*.py`, `*.pyc`, `*.pyw`, `*.so` or
+  `*.pyd` anywhere in this repository (a `conftest.py` included), and the root `pytest.ini`,
+  `pyproject.toml`, `setup.cfg`, `tox.ini`, `.pytest.ini`, `pytest.toml` and `.pytest.toml`, a
+  deletion included. The proof commands run `python3 -m pytest` or `python3 -m unittest` from the
+  repository root, and `-m` puts the current directory first on `sys.path`. So a root
+  `pytest/__init__.py` or `json.py` would replace the runner or the standard library, and pytest
+  loads a root `conftest.py` and reads the root configuration, on whoever runs the suite next. A
+  `*.pth` file is listed too, as a conservative over-inclusion: it executes only from a site
+  directory, which this repository is not.
+
+Not a protected decision, so it merges on the gate verdict alone:
+
+- every Markdown file directly in `aeos/` (no workflow runs it, the gate never reads it and nothing
+  imports it);
+- the root docs: `README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+  `CODE_OF_CONDUCT.md` and `profile/`;
+- a seat-ceilings edit that only removes entries, with nothing else changed, where no removed entry
+  shares its seat (repository, case-insensitive, and issue) with an entry that is kept. Such a removal
+  only narrows authority and can never promote another entry for the same seat. An entry without
+  a clean seat, or any other change to the file (deleting it included), stays protected.
+
+Rulesets, branch protection and secrets are outside this repository and stay operator-governed.
+No machine principal approves its own change; that is unchanged.
+
+The ceilings release is proved from the diff's base and head blobs, read as data. Both sides parse
+as JSON objects with the same keys and the same value for every key but `ceilings`. Both
+`ceilings` are lists, and the head list is the base list with one or more entries taken out (each
+kept entry equal to a base entry, in the same order). Every base entry names its seat, and no removed
+seat keeps an entry. An unreadable or oversized blob, or anything else the gate cannot prove,
+leaves the file protected. If any path in a pull request is protected, the whole pull request
+needs the operator.
 
 The anti-ratchet floor on `merge_ready_gate.py` is deliberately structural, not
 semantic: it catches a load-bearing declaration being deleted outright, which is
@@ -330,7 +381,7 @@ GitHub-authenticated facts under its own read-only token, and the gate judges th
   authorise rewriting the ceiling parser; a malformed envelope entry anywhere invalidates the
   block; evidence that resolves inside the candidate tree is malformed.
 - **Only the operator decides a change to the judge.** In this repository, a control-plane
-  change (everything under `aeos/` except a Markdown file directly in it, every `.gitattributes`, and the workflows) is judged
+  change (the protected-decision set above) is judged
   on its content only when the trusted evidence
   either names a pinned operator principal (type User) as PR author and an operator principal as
   the run's actor, **or** shows the operator approved exactly this machine-authored head (the
@@ -656,7 +707,7 @@ worth validating before it is merged.
 In this repository, a pull request that touches `.github/workflows/**` or `aeos/**`,
 including a change to the gate itself, is judged on its content only when an
 identified operator authors and runs it, or approves its exact machine-authored
-head. Anything else is refused by design. A Markdown file directly in `aeos/` is an ordinary file here: no workflow runs it, the gate never reads it and nothing imports it, so a change confined to such prose is judged on content and merges like any other (agent-toolkit #3052, 2026-10-19). Every other path under `aeos/` stays control plane, a new file or directory included: the judge puts `aeos/` first on its import path, and its tests are the evidence the operator reads when he approves a change to the judge. A `.gitattributes` file anywhere in this repository is control plane too, because it rewrites the judge's checked-out bytes.
+head. Anything else is refused by design. "The protected-decision set" above lists what this covers and what merges on the gate verdict alone (agent-toolkit #3052, 2026-10-19 and 2026-10-20).
 
 ## Tests
 
