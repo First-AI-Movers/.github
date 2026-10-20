@@ -46,9 +46,8 @@ review, do not wait. `aeos-merge-ready` is the one merge-blocking verdict.
 **Two exceptions, both deliberate, both in this repository only.** Each fails with
 `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`:
 
-- **Who may change the judge.** A control-plane change here (everything under `aeos/`
-  except a Markdown file directly in it; every `.gitattributes`; `.github/workflows/**`;
-  `.github/actions/**`; `.github/aeos-gate.json`; `.github/aeos-smoke.json`) is judged on its content only when
+- **Who may change the judge.** A control-plane change here (the protected-decision set
+  below) is judged on its content only when
   the operator decided it. Either the trusted evidence names a pinned operator principal (type User) as the
   PR author *and* as the run's actor, or the machine principal authored, ran and
   committed it and the operator's latest decisive review **approves that exact head**
@@ -62,7 +61,49 @@ review, do not wait. `aeos-merge-ready` is the one merge-blocking verdict.
   organization. It is refused whoever authors it; an organization administrator
   merges it under a ruleset bypass.
 
-These are the only human gates in the merge path. A Markdown file directly in `aeos/` is an ordinary file here: no workflow runs it, the gate never reads it and nothing imports it, so a change confined to such prose is judged on content and merges like any other (agent-toolkit #3052, 2026-10-19). Every other path under `aeos/` stays control plane, a new file or directory included: the judge puts `aeos/` first on its import path, and its tests are the evidence the operator reads when he approves a change to the judge. A `.gitattributes` file anywhere in this repository is control plane too, because it rewrites the judge's checked-out bytes. The same changes in a consumer
+These are the only human gates in the merge path, and they are for genuine protected
+decisions only (agent-toolkit #3052, operator directive 2026-10-20). The protected-decision set in
+this repository is:
+
+- **The judge** — every `aeos/*.py`, and any new file or directory under `aeos/`, because the
+  judge puts `aeos/` first on its import path.
+- **Its classification and trust data** — `aeos/standing-governor-policy.json`: roots, allowlist,
+  members, operator principals and signer keys.
+- **The seat ceilings** — `aeos/standing-seat-ceilings.json`, which grants standing seats their
+  authority, except a removal that touches no kept seat (below).
+- **The tests and their vectors** — `aeos/tests/**`. They are executable evidence that runs on
+  whoever runs the suite, the operator's machine with his signing key included, and no static
+  check can rule out a suite that passes without testing anything.
+- **Every workflow and action** — `.github/workflows/**` and `.github/actions/**`: the merge-ready
+  judge, and the main-smoke and revert rail, which holds the revert App's private key.
+- **The gate and smoke configuration** — `.github/aeos-gate.json` and `.github/aeos-smoke.json`,
+  which decide how a check behaves.
+- **Every `.gitattributes`** — it rewrites the judge's checked-out bytes.
+- **Every Python source and the test configuration** — any `*.py`, `*.pyc`, `*.pyw`, `*.so` or
+  `*.pyd` anywhere in this repository (a `conftest.py` included), and the root `pytest.ini`,
+  `pyproject.toml`, `setup.cfg`, `tox.ini`, `.pytest.ini`, `pytest.toml` and `.pytest.toml`, a
+  deletion included. The proof commands run `python3 -m pytest` or `python3 -m unittest` from the
+  repository root, and `-m` puts the current directory first on `sys.path`. So a root
+  `pytest/__init__.py` or `json.py` would replace the runner or the standard library, and pytest
+  loads a root `conftest.py` and reads the root configuration, on whoever runs the suite next. A
+  `*.pth` file is listed too, as a conservative over-inclusion: it executes only from a site
+  directory, which this repository is not.
+
+Not a protected decision, so it merges on the gate verdict alone:
+
+- every Markdown file directly in `aeos/` (no workflow runs it, the gate never reads it and nothing
+  imports it);
+- the root docs: `README.md`, `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+  `CODE_OF_CONDUCT.md` and `profile/`;
+- a seat-ceilings edit that only removes entries, with nothing else changed, where no removed entry
+  shares its seat (repository, case-insensitive, and issue) with an entry that is kept. Such a removal
+  only narrows authority and can never promote another entry for the same seat. An entry without
+  a clean seat, or any other change to the file (deleting it included), stays protected.
+
+Rulesets, branch protection and secrets are outside this repository and stay operator-governed.
+No machine principal approves its own change; that is unchanged.
+
+If any path in a pull request is protected, the whole pull request needs the operator. The same changes in a consumer
 repository are judged on content and merge. `aeos/README.md` is the contract for
 both.
 
@@ -99,8 +140,8 @@ signer expiry, and reads one committed data file, `aeos/standing-governor-policy
 whose member list the gate regenerates from the candidate's base and head commits on
 every evaluation and refuses as drift when it differs, and whose pinned signer
 fingerprint it binds to the pinned public key. Nothing in it executes candidate
-bytes. Editing that data file is a control-plane change like any other file under
-`aeos/`: judged by the predecessor, never by the candidate.
+bytes. Editing that data file is a control-plane change like the judge's own source:
+judged by the predecessor, never by the candidate.
 
 **Adding a rule to the workflow policy carries two obligations.** Give it a
 violation that must fire *and* a near-miss that must stay silent — a policy that

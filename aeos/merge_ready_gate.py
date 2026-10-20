@@ -138,14 +138,37 @@ its prose, a Markdown file directly in ``aeos/`` (agent-toolkit #3052, 2026-10-1
 confined to it is judged on its content like any other file and merges without the operator.
 Everything else under ``aeos/`` stays control plane, a new file or directory included: the
 judge puts ``aeos/`` first on its import path, so a new module or package there could stand in
-for one it imports, and the tests are the evidence an operator reads when he approves a
-change to the judge, which nothing re-runs after a merge. The gate diffs with ``--no-renames``,
-so moving a control-plane file into prose still deletes a control-plane path."""
+for one it imports, and the tests are executable evidence that runs wherever the suite is run.
+The one exception (agent-toolkit #3052, 2026-10-20) is a seat-ceilings edit that only removes
+whole seats, proved per path by :func:`policy_ordinary_paths`. The gate diffs with
+``--no-renames``, so moving a control-plane file into prose still deletes a control-plane path."""
 
 POLICY_ATTRIBUTES_NAME = ".gitattributes"
 """In this repository an attributes file anywhere is control plane: one at the root or in
 ``aeos/`` rewrites the checked-out bytes of the judge in every trusted checkout (end-of-line
 and encoding rules), including the smoke step that holds the revert credential."""
+
+
+POLICY_PYTHON_SOURCE_SUFFIXES = (".py", ".pyc", ".pyw", ".so", ".pyd")
+POLICY_PTH_SUFFIX = ".pth"
+POLICY_ROOT_TEST_CONFIG = frozenset(
+    {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", ".pytest.ini", "pytest.toml", ".pytest.toml"})
+"""In this repository every Python source or extension module is control plane wherever it sits,
+the root test configuration is control plane, and so is any ``.pth`` file, a deletion included
+(agent-toolkit #3052, 2026-10-20). The documented proof commands (``python3 -m pytest aeos/tests/``,
+``python3 -m unittest discover -s aeos/tests``) run from the repository root, and ``-m`` puts the
+current directory first on ``sys.path``. So a root ``pytest/__init__.py``, ``unittest.py`` or
+``json.py`` would replace the runner or the standard library, and pytest loads a root
+``conftest.py`` and reads a root ``pytest.ini`` / ``pyproject.toml`` / ``setup.cfg`` / ``tox.ini``
+/ ``pytest.toml``, on whoever runs the suite next. Inside ``aeos/`` the ``aeos/`` rule already holds.
+A ``.pth`` file executes only from a site directory, which this repository is not. It is listed as
+a conservative over-inclusion, not because it runs from here."""
+
+
+def _policy_import_hook(path: str) -> bool:
+    lowered = path.lower()
+    return (lowered.endswith(POLICY_PYTHON_SOURCE_SUFFIXES) or lowered.endswith(POLICY_PTH_SUFFIX)
+            or ("/" not in lowered and lowered in POLICY_ROOT_TEST_CONFIG))
 
 
 def _policy_self_ordinary(path: str) -> bool:
@@ -343,13 +366,18 @@ class Change:
     id is a cryptographic statement about which bytes they are.
     """
 
-    __slots__ = ("status", "path", "mode", "blob_sha")
+    __slots__ = ("status", "path", "mode", "blob_sha", "base_mode", "base_blob_sha")
 
-    def __init__(self, status: str, path: str, mode: str, blob_sha: str) -> None:
+    def __init__(self, status: str, path: str, mode: str, blob_sha: str,
+                 base_mode: str = "", base_blob_sha: str = "") -> None:
         self.status = status
         self.path = path
         self.mode = mode
         self.blob_sha = blob_sha
+        # The diff's other side: the mode and object id this path had at the merge base. Only the
+        # policy repository's seat-ceilings release reads it (``policy_ordinary_paths``).
+        self.base_mode = base_mode
+        self.base_blob_sha = base_blob_sha
 
     @property
     def deleted(self) -> bool:
@@ -428,9 +456,9 @@ def changed_records(
             raise GateError(
                 EVIDENCE_UNREADABLE, f"git diff emitted a malformed record: {meta!r}"
             )
-        _src_mode, dst_mode, _src_sha, dst_sha, status = parts
+        src_mode, dst_mode, src_sha, dst_sha, status = parts
         path = _safe_relpath(os.fsdecode(fields[index + 1]))
-        changes.append(Change(status, path, dst_mode, dst_sha))
+        changes.append(Change(status, path, dst_mode, dst_sha, src_mode, src_sha))
         index += 2
     return changes
 
@@ -540,7 +568,16 @@ def history_objects(candidate_dir: str, base_sha: str, head_sha: str) -> list[tu
 # --------------------------------------------------------------------------
 # Checks
 # --------------------------------------------------------------------------
-def control_plane_violations(paths: list[str], repository: str) -> list[str]:
+def control_plane_violations(
+    paths: list[str], repository: str, released: frozenset[str] | set[str] = frozenset()
+) -> list[str]:
+    """The changed paths that are merge-control surface.
+
+    ``released`` holds paths :func:`policy_ordinary_paths` proved need no operator decision (a
+    removal-only edit of the seat ceilings). It releases an ``aeos/`` path only: a workflow, a gate
+    or smoke configuration, every ``.gitattributes``, every Python source and the root test
+    configuration stay control plane whatever it holds.
+    """
     policy_repository = (repository or "").strip().lower() == POLICY_REPOSITORY
     # Case-insensitive: matching only the exact lowercase spelling would let a
     # differently-cased path slip past a rule that exists to be unskippable.
@@ -550,10 +587,106 @@ def control_plane_violations(paths: list[str], repository: str) -> list[str]:
             for p in paths
             if any(p.lower().startswith(pre) for pre in CONTROL_PLANE_PREFIXES)
             or p.lower() in CONTROL_PLANE_PATHS
-            or (policy_repository and p.lower().startswith(POLICY_SELF_PREFIXES) and not _policy_self_ordinary(p))
+            or (policy_repository and p.lower().startswith(POLICY_SELF_PREFIXES) and not _policy_self_ordinary(p)
+                and p not in released)
             or (policy_repository and p.lower().rsplit("/", 1)[-1] == POLICY_ATTRIBUTES_NAME)
+            or (policy_repository and _policy_import_hook(p))
         }
     )
+
+
+# --------------------------------------------------------------------------
+# The one class under aeos/ released from the operator: a seat-ceilings removal (agent-toolkit #3052)
+# --------------------------------------------------------------------------
+POLICY_CEILINGS_PATH = "aeos/standing-seat-ceilings.json"
+POLICY_CEILINGS_KEY = "ceilings"
+"""This file grants standing seats their authority (Agent Toolkit reads it from this repository's
+``main``), so an addition or an edit widens authority and stays control plane. Taking out the
+entries of a seat that keeps no other entry only narrows it, so such a removal is released."""
+
+
+def _seat_key(entry: object) -> tuple[str, int] | None:
+    """A ceiling entry's seat: ``(repository lower-cased, issue)``, or ``None`` when it has no clean one."""
+    if not isinstance(entry, dict):
+        return None
+    repository, issue = entry.get("repository"), entry.get("issue")
+    if not isinstance(repository, str) or not repository or not isinstance(issue, int) or isinstance(issue, bool):
+        return None
+    return repository.lower(), issue
+
+
+def _ceilings_removal_only(change: Change, blobs: dict[str, bytes]) -> bool:
+    """Is this a modification of the seat ceilings that only removes whole seats?"""
+    if change.path.lower() != POLICY_CEILINGS_PATH or change.status != "M":
+        return False
+    if change.mode not in REGULAR_MODES or change.base_mode not in REGULAR_MODES:
+        return False
+    base_raw, head_raw = blobs.get(change.base_blob_sha), blobs.get(change.blob_sha)
+    if base_raw is None or head_raw is None:
+        return False
+    try:
+        base, head = json.loads(base_raw.decode("utf-8")), json.loads(head_raw.decode("utf-8"))
+    except Exception:  # noqa: BLE001 - unparseable either side fails closed
+        return False
+    if not isinstance(base, dict) or not isinstance(head, dict) or set(base) != set(head):
+        return False
+    if any(base[key] != head[key] for key in base if key != POLICY_CEILINGS_KEY):
+        return False
+    before, after = base.get(POLICY_CEILINGS_KEY), head.get(POLICY_CEILINGS_KEY)
+    if not isinstance(before, list) or not isinstance(after, list) or len(after) >= len(before):
+        return False
+    # The head list is the base list with entries taken out: an in-order subsequence, so an entry
+    # that is new, edited, duplicated or moved is not a removal.
+    kept_at: list[int] = []
+    position = 0
+    for entry in after:
+        while position < len(before) and before[position] != entry:
+            position += 1
+        if position == len(before):
+            return False
+        kept_at.append(position)
+        position += 1
+    # A removal may never promote a different entry for the same seat: Agent Toolkit's reader is not
+    # this repository's to describe, so a removed seat must keep no entry at all. Every entry must
+    # name its seat; one that does not fails closed.
+    seats = [_seat_key(entry) for entry in before]
+    if any(seat is None for seat in seats):
+        return False
+    kept_positions = set(kept_at)
+    kept = {seats[i] for i in kept_positions}
+    return not any(seats[i] in kept for i in range(len(before)) if i not in kept_positions)
+
+
+def policy_ordinary_paths(candidate_dir: str, changes: list[Change], repository: str) -> frozenset[str]:
+    """The changed ``aeos/`` paths in this policy repository that need no operator decision.
+
+    Today that is only a removal-only edit of the seat ceilings. It reads the base and head blobs
+    the diff names, as data. Every unreadable or oversized blob or parse failure leaves the path
+    control plane: this function only ever releases, and anything it cannot prove stays the
+    operator's.
+    """
+    if (repository or "").strip().lower() != POLICY_REPOSITORY:
+        return frozenset()
+    candidates = [c for c in changes if c.path.lower() == POLICY_CEILINGS_PATH]
+    if not candidates:
+        return frozenset()
+    shas = sorted({sha for c in candidates for sha in (c.blob_sha, c.base_blob_sha)
+                   if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha or "") and set(sha) != {"0"}})
+    try:
+        sizes = blob_sizes(candidate_dir, shas)
+        readable = [sha for sha in shas if sizes.get(sha, MAX_PARSE_BYTES + 1) <= MAX_PARSE_BYTES]
+        blobs = read_blobs(candidate_dir, readable)
+    except Exception:  # noqa: BLE001 - unreadable evidence releases nothing
+        return frozenset()
+    released = set()
+    for change in candidates:
+        try:
+            ordinary = _ceilings_removal_only(change, blobs)
+        except Exception:  # noqa: BLE001 - nothing it cannot prove is released
+            ordinary = False
+        if ordinary:
+            released.add(change.path)
+    return frozenset(released)
 
 
 class GateConfig:
@@ -937,7 +1070,11 @@ def evaluate(
     # the STRICT lane instead (#3311): the candidate's bytes are measured against
     # floors specific to the merge-control surface it changes, by the trusted
     # policy resolved from the base commit. It is judged, not deferred.
-    report.control_plane = control_plane_violations([c.path for c in changes], repository)
+    # agent-toolkit #3052 (2026-10-20): in this policy repository one class under aeos/ is released from the
+    # operator -- a seat-ceilings edit that only removes whole seats, proved from the base and head blobs.
+    # Anything unproven stays control plane.
+    released = policy_ordinary_paths(candidate_dir, changes, repository)
+    report.control_plane = control_plane_violations([c.path for c in changes], repository, released=released)
 
     # #3752 architecture lock 5, at the estate level: a MACHINE principal never edits its own
     # judge. In this policy repository a control-plane change (the gate, the derivation policy,
