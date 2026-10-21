@@ -189,6 +189,10 @@ operator directive 2026-10-20). In this repository those are:
   loads a root `conftest.py` and reads the root configuration, on whoever runs the suite next. A
   `*.pth` file is listed too, as a conservative over-inclusion: it executes only from a site
   directory, which this repository is not.
+  A symbolic link is judged by its own path, so a root link named like a package (a `pytest` link to
+  a directory) is not listed. It adds no code of its own: a Python file it reaches inside this
+  repository is protected by its own path, and a target outside the repository is not content any
+  pull request here controls.
 
 Not a protected decision, so it merges on the gate verdict alone:
 
