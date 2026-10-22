@@ -150,6 +150,44 @@ def failing_set(evidence) -> frozenset:
     )
 
 
+def comparable_items(evidence) -> dict:
+    """``{check id: (kind, items)}`` for each CODE_FAILURE check whose findings
+    the smoke recorded as comparable across commits (``main_smoke.ITEM_KINDS``)."""
+    if not isinstance(evidence, dict):
+        return {}
+    found = {}
+    for c in evidence.get("checks") or []:
+        if not (isinstance(c, dict) and c.get("status") == "CODE_FAILURE"):
+            continue
+        kind, items = c.get("item_kind"), c.get("items")
+        if (kind in main_smoke.ITEM_KINDS and isinstance(items, list)
+                and 0 < len(items) <= main_smoke.MAX_ITEMS and all(isinstance(i, str) for i in items)):
+            found[str(c.get("id"))] = (kind, frozenset(items))
+    return found
+
+
+def introduced_items(first, parent) -> dict:
+    """The findings ``first`` reports inside checks the parent already fails.
+
+    Only where both runs recorded comparable findings for the same check; any
+    other check is compared on its id alone, as before. A parent session that
+    collection errors interrupted ran no test, so it is no baseline for a run
+    whose session reached its tests: that pair compares nothing.
+    """
+    mine, theirs = comparable_items(first), comparable_items(parent)
+    introduced = {}
+    for cid, (kind, items) in mine.items():
+        if cid not in theirs:
+            continue
+        parent_kind, parent_items = theirs[cid]
+        if parent_kind == main_smoke.PYTEST_COLLECTION_ITEMS and kind != parent_kind:
+            continue
+        new = sorted(items - parent_items)
+        if new:
+            introduced[cid] = new
+    return introduced
+
+
 def _git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
 
@@ -310,22 +348,29 @@ def decide(first, second, parent, sha: str, before: str, repo_root) -> dict:
                    " -- a check with no comparison cannot prove an origin; no revert",
                    signature=s1)
 
+    new_items = {}
     if po == "CODE_FAILURE":
         # Origin is decided by failing SETS, not by whole-signature equality. On
         # an already-red default branch, a later commit that adds no new failure
         # is inheriting one even though its signature differs. A commit is the
         # origin only of the failures it INTRODUCED -- which is also what stops
         # the rail oscillating, because reverting this commit restores exactly
-        # the parent's failure set and no more.
-        if ps == s1 or not introduced_ids:
+        # the parent's failure set and no more. Inside a check the parent already
+        # fails, a failure is a finding the check names: a second collection
+        # error in an already-red collection is this commit's, while the same
+        # findings, or none that can be compared, are inherited.
+        new_items = introduced_items(first, parent)
+        if ps == s1 or not (introduced_ids or new_items):
             return out("INHERITED_FAILURE_NOT_ORIGIN",
                        "the parent already fails every check this commit fails -- inherited, "
                        "not the origin; the origin's own run owns the revert",
                        signature=s1, parent_failures=sorted(list(x) for x in failing_set(parent)))
-        origin_note = f"introduced {len(introduced_ids)} newly failing check(s) on an already-red branch"
+        origin_note = (f"introduced {len(introduced_ids)} newly failing check(s) and "
+                       f"{sum(len(v) for v in new_items.values())} new finding(s) inside already-failing "
+                       "check(s) on an already-red branch")
     else:
         origin_note = "the parent passed"
-    introduced = sorted(introduced_ids)
+    introduced = sorted(introduced_ids | set(new_items))
 
     try:
         changed = changed_paths_of(repo_root, sha)
@@ -344,7 +389,7 @@ def decide(first, second, parent, sha: str, before: str, repo_root) -> dict:
                "confirmed identical deterministic CODE_FAILURE twice on one attributable squash "
                f"commit; {origin_note}",
                signature=s1, subject=subject, branch=f"{BRANCH_PREFIX}{sha[:12]}",
-               changed_paths=changed, introduced_failures=introduced)
+               changed_paths=changed, introduced_failures=introduced, introduced_items=new_items)
 
 
 # ---------- execute -------------------------------------------------------------

@@ -226,7 +226,8 @@ steps only. You should not need `env -u` anything.
 
 The outcome says *which* declared command failed and its exit code, never what
 it printed: output carries timestamps and temporary paths, and in a signature
-those would make two runs of one commit disagree. So each smoke run (first,
+those would make two runs of one commit disagree. The one exception is what
+pytest's own short test summary names (see *Findings inside one check* below). So each smoke run (first,
 confirm and parent) keeps every failing command's own output **beside** the
 outcome, in the outcome file's `failure_output` list: the check id, the exit
 code, and its stdout and stderr. Each stream keeps its first 8,192 and last
@@ -286,10 +287,45 @@ baseline if it measured the same thing:
   than to have been broken all along. This is also the path a newly added test
   takes when a reproducing transient breaks it.
 
-A known asymmetry: because `items` are in the signature but not in the failing
-set, once a branch is red on a check no later commit can be auto-reverted for a
-*new* failure of that same check. One un-revertible red disarms that check class
-until it is fixed. The rail biases towards not acting.
+### Findings inside one check
+
+A check id alone cannot tell two independent breaks apart. On 2026-10-20 one
+commit broke collection, a second commit broke it again in another module, and
+the revert of the first was still red because of the second: all three runs
+reported the same check, the same exit code and the same signature, so the
+second commit and the revert both read as inherited and `main` stayed red until
+a person fixed it forward.
+
+So a failing declared command contributes the **findings** pytest's own short
+test summary names, read from its whole output: `FAILED <node id>` and
+`ERROR <node id>`, a collection error being `ERROR <path>`. They are sorted,
+redacted with the credential shapes, bounded at 512 characters each and at the
+outcome's 200 items, and stable across two runs of one commit, so they join the
+signature. The check records what kind of set they are in `item_kind`:
+
+| `item_kind` | The session | The set holds |
+| --- | --- | --- |
+| `pytest` | ran to its end | every failing test and error |
+| `pytest-collection` | was interrupted by collection errors, before any test ran | every collection error |
+| *(absent)* | anything else | nothing comparable |
+
+Only the summary section is read, so a test's captured output is never a
+finding. A command whose output has no summary, more than one summary or stop
+banner, a session stopped early for any other reason (`-x`, a keyboard
+interrupt), or more findings than the outcome keeps records no `item_kind`, and
+the check is judged exactly as before. Findings never decide whether a check
+failed: a check pytest did not summarise still fails.
+
+Inside a check the parent already fails, the breaker compares the findings when
+both runs recorded an `item_kind` for it. A finding the parent does not have is
+this commit's, and the decision lists it in `introduced_items`; the same
+findings, fewer findings, or findings either side cannot compare are inherited.
+A parent whose session collection errors interrupted ran no test, so it is no
+baseline for a run whose session reached its tests. Findings from a floor check
+keep their old meaning: a lint line number moves with every edit above it, so
+those are compared on the check id alone. Where nothing is comparable the old
+asymmetry remains: once a branch is red on a check, a new failure of that check
+cannot be auto-reverted, and the rail biases towards not acting.
 
 The **signature** is built only from identifiers that are stable across two runs
 of the same commit — check id, typed reason, and sorted findings where a tool
