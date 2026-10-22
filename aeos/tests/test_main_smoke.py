@@ -1040,6 +1040,163 @@ def _outcome(sha, checks, source="floor:python+declared"):
             "checks": checks, "duration_seconds": 1.0}
 
 
+#: What pytest 9.1.1 prints for ``--collect-only -q`` over a tree with a
+#: module-name collision and an import error (checkout path neutralised).
+PYTEST_COLLECTION_OUTPUT = """\
+tests/a/test_cycle.py::test_ok
+tests/test_fail.py::test_f
+
+==================================== ERRORS ====================================
+____________________ ERROR collecting tests/b/test_cycle.py ____________________
+import file mismatch:
+imported module 'test_cycle' has this __file__ attribute:
+  /work/tests/a/test_cycle.py
+which is not the same as the test file we want to collect:
+  /work/tests/b/test_cycle.py
+HINT: remove __pycache__ / .pyc files and/or use a unique basename for your test file modules
+____________________ ERROR collecting tests/test_broken.py _____________________
+E   ModuleNotFoundError: No module named 'nonexistent_mod'
+=========================== short test summary info ============================
+ERROR tests/b/test_cycle.py
+ERROR tests/test_broken.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
+2 tests collected, 2 errors in 0.03s
+"""
+
+#: What it prints for ``-q`` with ``CI`` set: a message's later lines follow its
+#: item, unindented as often as not, and a parameter id may hold `` - ``.
+PYTEST_RUN_OUTPUT = """\
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+____________________________________ test_f ____________________________________
+----------------------------- Captured stdout call -----------------------------
+FAILED tests/captured.py::not_a_finding
+=========================== short test summary info ============================
+FAILED tests/test_fail.py::test_f - AssertionError: ERROR fake.py line
+  FAILED x.py::y
+assert 0
+FAILED tests/test_fail.py::test_p[a b] - AssertionError: assert 'a b' == 'z'
+FAILED tests/test_fail.py::test_p[c - d] - AssertionError: assert 'c - d' == 'z'
+FAILED tests/test_fail.py::test_q[e] - assert [1] == [2]
+4 failed in 0.01s
+"""
+
+
+class PytestItemsTestCase(unittest.TestCase):
+    """The findings a failing declared command names, read from pytest's summary."""
+
+    def test_collection_errors_are_named_by_path_and_typed_as_a_collection(self) -> None:
+        items, kind = smoke.pytest_items(PYTEST_COLLECTION_OUTPUT, "")
+        self.assertEqual(items, ["ERROR tests/b/test_cycle.py", "ERROR tests/test_broken.py"])
+        self.assertEqual(kind, smoke.PYTEST_COLLECTION_ITEMS)
+
+    def test_a_finished_session_names_each_failing_node_id_once(self) -> None:
+        items, kind = smoke.pytest_items(PYTEST_RUN_OUTPUT)
+        self.assertEqual(items, ["FAILED tests/test_fail.py::test_f",
+                                 "FAILED tests/test_fail.py::test_p[a b]",
+                                 "FAILED tests/test_fail.py::test_p[c - d]",
+                                 "FAILED tests/test_fail.py::test_q[e]"])
+        self.assertEqual(kind, smoke.PYTEST_ITEMS)
+
+    def test_the_findings_are_read_from_either_stream_and_in_any_order(self) -> None:
+        lines = PYTEST_RUN_OUTPUT.splitlines()
+        start = lines.index("=========================== short test summary info ============================")
+        shuffled = "\n".join(lines[:start + 1] + list(reversed(lines[start + 1:-1])) + lines[-1:])
+        self.assertEqual(smoke.pytest_items("", shuffled), smoke.pytest_items(PYTEST_RUN_OUTPUT, ""))
+
+    def test_only_the_summary_section_is_read(self) -> None:
+        wrapped = (PYTEST_COLLECTION_OUTPUT + "collectability: collect exited 2\n"
+                   "ERROR tests/after_the_session.py\n")
+        self.assertEqual(smoke.pytest_items(wrapped), smoke.pytest_items(PYTEST_COLLECTION_OUTPUT))
+        stats_only = PYTEST_RUN_OUTPUT + "FAILED tests/after_the_stats.py::t\n"
+        stopped = PYTEST_COLLECTION_OUTPUT.replace(
+            "!!!!\n2 tests collected", "!!!!\nERROR tests/after_the_stop.py\n2 tests collected")
+        self.assertEqual(smoke.pytest_items(stopped), smoke.pytest_items(PYTEST_COLLECTION_OUTPUT))
+        self.assertEqual(smoke.pytest_items(stats_only), smoke.pytest_items(PYTEST_RUN_OUTPUT))
+        banner = PYTEST_RUN_OUTPUT.replace("4 failed in 0.01s", "==== warnings summary ====\n"
+                                           "FAILED tests/a_warning.py::t\n4 failed in 0.01s")
+        self.assertEqual(smoke.pytest_items(banner), smoke.pytest_items(PYTEST_RUN_OUTPUT))
+
+    def test_output_with_no_summary_names_nothing(self) -> None:
+        for text in ("", "Traceback (most recent call last):\nFAILED tests/x.py::t\n",
+                     "ERROR: file or directory not found: tests/gone.py\n"):
+            with self.subTest(text=text):
+                self.assertEqual(smoke.pytest_items(text), ([], None))
+
+    def test_a_session_stopped_early_for_another_reason_is_not_comparable(self) -> None:
+        for stop in ("stopping after 1 failures", "KeyboardInterrupt",
+                     "Interrupted: Test failed, continuing from this test next run."):
+            with self.subTest(stop=stop):
+                text = PYTEST_RUN_OUTPUT.replace("4 failed in 0.01s", f"!!!!! {stop} !!!!!\n4 failed in 0.01s")
+                items, kind = smoke.pytest_items(text)
+                self.assertTrue(items)
+                self.assertIsNone(kind)
+
+    def test_a_collection_stop_beside_another_stop_is_not_comparable(self) -> None:
+        items, kind = smoke.pytest_items(PYTEST_COLLECTION_OUTPUT + "!!!!! KeyboardInterrupt !!!!!\n")
+        self.assertEqual(len(items), 2)
+        self.assertIsNone(kind)
+
+    def test_two_sessions_are_not_comparable(self) -> None:
+        items, kind = smoke.pytest_items(PYTEST_RUN_OUTPUT + PYTEST_COLLECTION_OUTPUT)
+        self.assertEqual(len(items), 6)
+        self.assertIsNone(kind)
+
+    def test_more_findings_than_the_outcome_keeps_are_not_comparable(self) -> None:
+        summary = "\n".join(f"FAILED tests/test_n.py::test_{n:04d}" for n in range(smoke.MAX_ITEMS + 1))
+        items, kind = smoke.pytest_items(f"==== short test summary info ====\n{summary}\n")
+        self.assertEqual(len(items), smoke.MAX_ITEMS + 1)
+        self.assertIsNone(kind)
+        _, kind = smoke.pytest_items("==== short test summary info ====\n"
+                                     + "\n".join(summary.splitlines()[:smoke.MAX_ITEMS]) + "\n")
+        self.assertEqual(kind, smoke.PYTEST_ITEMS)
+
+    def test_a_finding_is_redacted_and_bounded(self) -> None:
+        token = "ghp_" + "A1b2" * 10
+        begin = "-----BEGIN " + "RSA PRIVATE KEY-----"
+        text = ("==== short test summary info ====\n"
+                f"FAILED tests/test_s.py::test_seed[{token}]\n"
+                f"FAILED tests/test_s.py::test_seed[{begin}x] - ValueError\n"
+                f"FAILED tests/test_s.py::test_long[{'x' * 2000}]\n")
+        items, _ = smoke.pytest_items(text)
+        self.assertIn("FAILED tests/test_s.py::test_seed[[REDACTED:github_token]]", items)
+        self.assertIn("FAILED tests/test_s.py::test_seed[[REDACTED:private_key_block]", items)
+        self.assertNotIn("A1b2", json.dumps(items))
+        self.assertTrue(all(len(i) <= smoke.MAX_ITEM_CHARS for i in items))
+
+    def test_a_failing_command_carries_its_findings_into_the_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Repo(tmp)
+            repo.write("collect.txt", PYTEST_COLLECTION_OUTPUT)
+            repo.write(".github/aeos-smoke.json", json.dumps({
+                "schema_version": "1", "language_floor": False,
+                "commands": [{"name": "collectability", "run": "date +%s%N; cat collect.txt >&2; exit 2"},
+                             {"name": "plain", "run": "echo no summary here; exit 1"}]}))
+            sha = repo.commit()
+            first, second = smoke.run_smoke(tmp, sha), smoke.run_smoke(tmp, sha)
+        self.assertEqual(first["signature"], second["signature"])
+        collect, plain = first["checks"][-2], first["checks"][-1]
+        self.assertEqual(collect["items"], ["ERROR tests/b/test_cycle.py", "ERROR tests/test_broken.py"])
+        self.assertEqual(collect["item_kind"], smoke.PYTEST_COLLECTION_ITEMS)
+        self.assertEqual(collect["reason"], "COMMAND_FAILURE:collectability:exit2")
+        # Output pytest did not summarise still fails, exactly as before.
+        self.assertEqual((plain["status"], plain["items"]), ("CODE_FAILURE", []))
+        self.assertNotIn("item_kind", plain)
+        self.assertEqual(first["outcome"], "CODE_FAILURE")
+
+    def test_a_passing_command_names_nothing_whatever_it_prints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Repo(tmp)
+            repo.write("collect.txt", PYTEST_COLLECTION_OUTPUT)
+            repo.write(".github/aeos-smoke.json", json.dumps({
+                "schema_version": "1", "language_floor": False,
+                "commands": [{"name": "unit", "run": "cat collect.txt"}]}))
+            result = smoke.run_smoke(tmp, repo.commit())
+        self.assertEqual(result["outcome"], "PASS")
+        self.assertEqual(result["checks"][-1]["items"], [])
+        self.assertNotIn("item_kind", result["checks"][-1])
+
+
 class RepeatedInfraTestCase(unittest.TestCase):
     """The same INFRA reason on two consecutive commits is not an outage."""
 

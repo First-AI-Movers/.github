@@ -721,6 +721,78 @@ def check_ruff(repo_root: Path, tools: Tools, timeout, targets=None) -> dict:
 BUILTINS = {"__compile__": check_compile, "__ruff__": check_ruff}
 
 
+# ---------- findings a failing declared command names ---------------------------
+
+#: The kinds of finding a failing declared command can contribute, read from
+#: pytest's own short test summary. ``pytest`` is a session that ran to its end,
+#: so every failing test and error is listed. ``pytest-collection`` is a session
+#: that collection errors interrupted before any test ran, so the list is every
+#: collection error and nothing else. The breaker compares a check's findings
+#: across commits only when the smoke recorded one of these kinds for it.
+PYTEST_ITEMS = "pytest"
+PYTEST_COLLECTION_ITEMS = "pytest-collection"
+ITEM_KINDS = (PYTEST_ITEMS, PYTEST_COLLECTION_ITEMS)
+MAX_ITEM_CHARS = 512
+
+_PYTEST_SUMMARY_RE = re.compile(r"^=+ short test summary info =+$")
+_PYTEST_BANNER_RE = re.compile(r"^=+ .* =+$")
+_PYTEST_STOP_RE = re.compile(r"^!+ (?P<text>.*?) !+$")
+_PYTEST_COLLECTION_STOP_RE = re.compile(r"^Interrupted: \d+ errors? during collection$")
+_PYTEST_STATS_RE = re.compile(r"^\d+ [a-z].* in \d+(?:\.\d+)?s\b")
+#: ``FAILED <node id>`` or ``ERROR <node id>``, then pytest's `` - <message>`` or
+#: the end of the line. A node id is a ``.py`` path, any ``::`` names, and one
+#: optional parameter id, which may itself hold `` - ``, so its bracket is closed
+#: at the first ``]`` the separator follows.
+_PYTEST_ITEM_RE = re.compile(
+    r"^(?P<word>FAILED|ERROR) (?P<nodeid>[^\s:\[\]]+\.py(?:::[^\s:\[\]]+)*(?:\[.*?\])?)(?: - |$)"
+)
+
+
+def pytest_items(*streams):
+    """The findings pytest's own summary names in a failing command's output.
+
+    Returns ``(items, kind)``: sorted ``FAILED <node id>`` / ``ERROR <node id>``
+    strings, each redacted and bounded, and the kind of set they are -- or
+    ``None`` when the set cannot be compared with another commit's. That is
+    when no summary names anything, when more than one summary or stop banner
+    appears (two sessions, which one session's numbers cannot describe), when a
+    session stopped early for anything but collection errors (``-x``, a
+    keyboard interrupt), or when there are more findings than the outcome keeps.
+
+    Only the summary section is read, so a test's captured output above it is
+    never a finding. The items are still the repository's own text: they refine
+    which already-failing check a commit is the origin of, and never decide
+    whether a check failed.
+    """
+    items, summaries, stops = set(), 0, []
+    for text in streams:
+        inside = False
+        for line in (text or "").splitlines():
+            if _PYTEST_SUMMARY_RE.match(line):
+                inside, summaries = True, summaries + 1
+                continue
+            stop = _PYTEST_STOP_RE.match(line)
+            if stop:
+                stops.append(stop.group("text"))
+            if not inside:
+                continue
+            if stop or _PYTEST_BANNER_RE.match(line) or _PYTEST_STATS_RE.match(line):
+                inside = False
+                continue
+            found = _PYTEST_ITEM_RE.match(line)
+            if found:
+                items.add(_redacted(f"{found.group('word')} {found.group('nodeid')}")[:MAX_ITEM_CHARS])
+    if not items:
+        return [], None
+    kind = None
+    if summaries == 1 and len(items) <= MAX_ITEMS:
+        if not stops:
+            kind = PYTEST_ITEMS
+        elif len(stops) == 1 and _PYTEST_COLLECTION_STOP_RE.match(stops[0]):
+            kind = PYTEST_COLLECTION_ITEMS
+    return sorted(items), kind
+
+
 def _redacted(text: str) -> str:
     text = PRIVATE_KEY_BLOCK.sub("[REDACTED:private_key_block]", text)
     return CREDENTIAL_SHAPES_COMBINED.sub(lambda m: f"[REDACTED:{m.lastgroup}]", text)
@@ -751,7 +823,8 @@ def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout, *, is_setu
     When it exits non-zero, a bounded copy of its output is appended to
     ``failure_output``, if given. That copy is for a person reading why: it never
     reaches the check, the outcome or the signature, which must stay identical
-    across two runs whose output differs by a timestamp.
+    across two runs whose output differs by a timestamp. Only the findings
+    :func:`pytest_items` names do.
     """
     name = entry["name"]
     cid = f"setup:{name}" if is_setup else name
@@ -779,8 +852,20 @@ def run_declared(repo_root: Path, entry: dict, tools: Tools, timeout, *, is_setu
     # repository's own text: a pytest collection listing printed test ids
     # containing "Could not resolve host", and a real failure read as an outage
     # on sixteen merges in a row (operator decision, 2026-10-15).
-    return _check(cid, "CODE_FAILURE", f"COMMAND_FAILURE:{name}:exit{proc.returncode}",
-                  f"{name!r} exited {proc.returncode}")
+    #
+    # It is read for the findings pytest's summary names, from the whole
+    # output rather than the kept copy: those are stable across two runs of one
+    # commit, so they join the signature, and with a kind the breaker can tell
+    # a new failure inside an already-red check from the one it inherited.
+    items, kind = pytest_items(proc.stdout, proc.stderr)
+    detail = f"{name!r} exited {proc.returncode}"
+    if items:
+        detail += f"; pytest names {len(items)} finding(s)" + ("" if kind else ", not comparable")
+    check = _check(cid, "CODE_FAILURE", f"COMMAND_FAILURE:{name}:exit{proc.returncode}", detail,
+                   items=items)
+    if kind:
+        check["item_kind"] = kind
+    return check
 
 
 # ---------- outcome -------------------------------------------------------------
