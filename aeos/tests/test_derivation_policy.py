@@ -206,9 +206,22 @@ class DerivationPolicyTestCase(unittest.TestCase):
     # -- closure regeneration --------------------------------------------------
     def test_closure_follows_absolute_relative_lazy_and_submodule_imports_with_package_inits(self) -> None:
         full, bounded = dp.regenerate_closure(self.repo.root, self.repo.base, self.policy())
-        self.assertEqual(full, EXPECTED_FULL)
+        # Only allowlisted chains are parsed, so the helpers behind the root are never read (agent-toolkit #8963).
+        self.assertEqual(full, EXPECTED_BOUNDED)
         self.assertEqual(bounded, EXPECTED_BOUNDED)
         self.assertNotIn("scripts/agent_relay/unrelated.py", full)
+
+    def test_root_outside_the_allowlist_is_not_parsed(self) -> None:
+        # A root outside the allowlist bounds nothing, so it is never read (agent-toolkit #8963).
+        self.write_policy(not_after=FAR_FUTURE)
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), encoding="utf-8") as handle:
+            document = json.load(handle)
+        document["derivation_policy"]["roots"] = [Repo.ROOT, "scripts/helpers/util.py"]
+        with open(os.path.join(self.policy_dir, dp.POLICY_FILE), "w", encoding="utf-8") as handle:
+            json.dump(document, handle)
+        full, bounded = dp.regenerate_closure(self.repo.root, self.repo.base, self.policy())
+        self.assertNotIn("scripts/helpers/util.py", full)
+        self.assertEqual(bounded, EXPECTED_BOUNDED)
 
     def test_missing_root_is_drift_not_silence(self) -> None:
         self.write_policy(not_after=FAR_FUTURE)
@@ -551,7 +564,7 @@ class DerivationPolicyTestCase(unittest.TestCase):
     def test_allowlisted_module_reached_only_through_an_unprotected_helper_is_not_protected(self) -> None:
         # The root reaches helpers/util.py (outside the allowlist), and util imports an allowlisted module. Util
         # runs first in the same process and an ordinary change to it can already do anything a change behind it
-        # could, so the module behind it is in the full closure but not bounded, and changing it is ordinary code.
+        # could, so the module behind it is not bounded, and changing it is ordinary code.
         self.repo.write("scripts/helpers/util.py", "import agent_relay.behind\nZ = 3\n")
         self.repo.write("scripts/agent_relay/behind.py", "B = 1\n")
         # Control: the same depth along allowlisted modules only stays bounded.
@@ -560,7 +573,8 @@ class DerivationPolicyTestCase(unittest.TestCase):
         self.repo.base = self.repo.commit("a chain through an unprotected helper, and one that is not")
         self.write_policy(not_after=FAR_FUTURE, members=EXPECTED_BOUNDED | {"scripts/agent_relay/deep.py"})
         full, bounded = dp.regenerate_closure(self.repo.root, self.repo.base, self.policy())
-        self.assertIn("scripts/agent_relay/behind.py", full)
+        # Behind an unprotected module it is never even parsed (agent-toolkit #8963).
+        self.assertNotIn("scripts/agent_relay/behind.py", full)
         self.assertNotIn("scripts/agent_relay/behind.py", bounded)
         self.assertEqual(bounded, EXPECTED_BOUNDED | {"scripts/agent_relay/deep.py"})
         self.repo.write("scripts/agent_relay/behind.py", "B = 2\n")

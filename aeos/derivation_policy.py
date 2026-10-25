@@ -569,9 +569,10 @@ def _imports_of(tree: ast.AST, module_id: str, is_package: bool) -> set[str]:
 
 
 def regenerate_closure(candidate_dir: str, commit: str, policy: Policy) -> tuple[set[str], set[str]]:
-    """``(full closure, bounded members)`` at ``commit``, from blobs read as data.
+    """``(expanded, bounded members)`` at ``commit``, from blobs read as data.
 
-    ``full`` is the whole first-party import closure of the roots. ``bounded`` is the part of it a root reaches
+    ``expanded`` is every module parsed: the allowlisted roots and what they reach through allowlisted modules,
+    so the rest of the first-party import closure is never read (agent-toolkit #8963). ``bounded`` is the part of it a root reaches
     along an import chain made ONLY of allowlisted modules (agent-toolkit #3052, 2026-10-19). A module reached only
     through an unprotected module is not bounded: the validator classes this conjunct exists for live on the
     protected chains, and the unprotected module in front of it is already ordinary code, so its protection
@@ -589,6 +590,9 @@ def regenerate_closure(candidate_dir: str, commit: str, policy: Policy) -> tuple
         # commit, so that adding one at the head lands in the protected set.
         pending.extend(_package_inits_of(root, files))
     seeds = list(pending)
+    # Only allowlisted modules are expanded: ``bounded`` follows allowlisted edges alone, so parsing the
+    # unprotected rest of the closure decides nothing and cost most of the gate's budget (agent-toolkit #8963).
+    pending = [p for p in pending if policy.in_allowlist(p)]
     edges: dict[str, set[str]] = {}
     seen: set[str] = set()
     while pending:
@@ -616,7 +620,7 @@ def regenerate_closure(candidate_dir: str, commit: str, policy: Policy) -> tuple
                 target = _resolve(imported, files)
                 if target:
                     targets.add(target)
-                    if target not in seen:
+                    if target not in seen and policy.in_allowlist(target):
                         pending.append(target)
     bounded: set[str] = set()
     chain = [p for p in seeds if policy.in_allowlist(p)]
