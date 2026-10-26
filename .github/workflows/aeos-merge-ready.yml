@@ -31,15 +31,7 @@ permissions:
 jobs:
   aeos-merge-ready:
     name: aeos-merge-ready
-    # Runner selection. A ruleset Required Workflow receives no caller inputs,
-    # so the one knob is the Actions variable AEOS_MERGE_READY_RUNNER_LABELS
-    # (organization or repository level). Unset, it is '["ubuntu-latest"]'.
-    # The allowlist lives in this expression: only the exact value
-    # '["self-hosted","linux","x64","aeos-cell"]', on an event that is not a
-    # fork's pull request, selects the Cell literal; anything else, a typo
-    # included, is ubuntu-latest, and the first step then fails it as
-    # GATE_CONFIG_INVALID. Never a runner the variable names itself.
-    runs-on: ${{ fromJSON(vars.AEOS_MERGE_READY_RUNNER_LABELS == '["self-hosted","linux","x64","aeos-cell"]' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","linux","x64","aeos-cell"]' || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     # A hang bound, not the budget. The budget is enforced twice inside the
     # gate step: an external `timeout` and the gate's own self-measurement.
     timeout-minutes: 10
@@ -51,27 +43,6 @@ jobs:
       issues: read
 
     steps:
-      - name: Refuse a runner label set outside the allowlist
-        # Before anything is checked out. `runs-on` has already sent any other
-        # value to ubuntu-latest; this makes the misconfiguration a typed red
-        # rather than a silently hosted green.
-        env:
-          AEOS_RUNNER_LABELS: ${{ vars.AEOS_MERGE_READY_RUNNER_LABELS || '["ubuntu-latest"]' }}
-        run: |
-          case "$AEOS_RUNNER_LABELS" in
-            '["ubuntu-latest"]'|'["self-hosted","linux","x64","aeos-cell"]') ;;
-            *)
-              line="AEOS_MERGE_READY_RESULT: FAIL GATE_CONFIG_INVALID"
-              detail='AEOS_MERGE_READY_RUNNER_LABELS must be exactly ["ubuntu-latest"] or ["self-hosted","linux","x64","aeos-cell"]'
-              echo "$line"
-              echo "$detail"
-              if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-                printf '## aeos-merge-ready\n\n%s\n\n- %s\n' "$line" "$detail" >> "$GITHUB_STEP_SUMMARY"
-              fi
-              exit 1
-              ;;
-          esac
-
       - name: Check out candidate (untrusted data)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
