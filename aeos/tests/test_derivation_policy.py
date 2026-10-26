@@ -1029,7 +1029,6 @@ class DerivationPolicyTestCase(unittest.TestCase):
             dp.MACHINE_ROUTE_AUTHORITY_REF_MISMATCH + "-other-repo-block": self.evidence(
                 body=self.programme_body(repository="First-AI-Movers/other")),
             dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE: self.evidence(body=self.programme_body(state="PAUSED")),
-            dp.MACHINE_ROUTE_AUTHORITY_EXPIRED: self.evidence(body=self.programme_body(not_after="2000-01-01T00:00:00Z")),
             dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE + "-revoked": self.evidence(body=self.programme_body(state="REVOKED", not_after=None)),
             dp.MACHINE_ROUTE_PROGRAMME_NOT_OPEN + "-closed-standing": self.evidence(state="closed", body=self.programme_body(not_after=None)),
             dp.MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID + "-not-after-number": self.evidence(body=self.programme_body(not_after=1)),
@@ -1069,15 +1068,14 @@ class DerivationPolicyTestCase(unittest.TestCase):
         self.write_machine_policy()
         head = self.protected_head()
         for label, not_after in (("standing", None), ("15-days", self.days_ahead(15)),
-                                 ("far-future", "9999-12-31T23:59:59Z")):
+                                 ("far-future", "9999-12-31T23:59:59Z"),
+                                 ("chosen-end-passed", "2000-01-01T00:00:00Z")):
             self.assertEqual(self.route(head, self.evidence(body=self.programme_body(not_after=not_after))), [], label)
         for label, doc, token in (
                 ("closed", self.evidence(state="closed", body=self.programme_body(not_after=None)),
                  dp.MACHINE_ROUTE_PROGRAMME_NOT_OPEN),
                 ("inactive", self.evidence(body=self.programme_body(state="INACTIVE", not_after=None)),
                  dp.MACHINE_ROUTE_AUTHORITY_NOT_ACTIVE),
-                ("chosen-end-passed", self.evidence(body=self.programme_body(not_after="2000-01-01T00:00:00Z")),
-                 dp.MACHINE_ROUTE_AUTHORITY_EXPIRED),
                 ("scope-not-widened", self.evidence(body=self.programme_body(not_after=None, envelope=["docs/"])),
                  dp.MACHINE_ROUTE_PATH_OUTSIDE_ENVELOPE)):
             findings = self.route(head, doc)
@@ -1135,8 +1133,9 @@ class DerivationPolicyTestCase(unittest.TestCase):
         self.assertEqual(self.route(root_head, self.evidence(
             body=self.seat_body(path_envelope=["scripts/agent_relay/models.py", Repo.ROOT]))), [])
 
-    def test_only_a_full_resident_ceiling_loses_its_date(self) -> None:
-        """Every block that is not the complete resident ceiling keeps the end it states."""
+    def test_every_block_judged_on_its_own_envelope_loses_its_date(self) -> None:
+        """A passed date refuses no block judged against its own envelope (agent-toolkit#3052
+        6425439595): whether or not it is the complete resident ceiling, it stands until revoked."""
         self.write_machine_policy()
         head = self.protected_head()
         six = {"schema": "standing-authority/v2", "state": "ACTIVE", "repository": TARGET, "issue": 3732,
@@ -1169,9 +1168,8 @@ class DerivationPolicyTestCase(unittest.TestCase):
         }
         for label, body in bounded.items():
             with self.subTest(label):
-                self.assertEqual(self.refusal(head, self.evidence(body=body), label),
-                                 dp.MACHINE_ROUTE_AUTHORITY_EXPIRED, label)
-        # and each of them is still admitted while its date is ahead: nothing but the date refused it
+                self.assertEqual(self.route(head, self.evidence(body=body)), [], label)
+        # and each of them is admitted while its date is ahead as well
         ahead = self.days_ahead(7)
         self.assertEqual(self.route(head, self.evidence(body=fence(dict(six, not_after=ahead)))), [])
         self.assertEqual(self.route(head, self.evidence(

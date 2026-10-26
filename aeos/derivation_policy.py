@@ -99,14 +99,15 @@ MAX_PROGRAMME_EDITS = 100
 a longer history is unavailable, not "operator-only by assumption")."""
 # A programme block is REVOCATION-bounded, not calendar-bounded (operator decision
 # agent-toolkit#3752 5925947456): `not_after: null` is standing intent that holds until the
-# operator closes the Issue, moves `state` off ACTIVE, or supersedes the block; a non-null
-# `not_after` is an operator-chosen end and is honoured. Elapsed time alone revokes nothing.
-# One class is different. The operator decided on 2026-10-04 that standing seats are not renewed
-# by hand and stand until relocated (agent-toolkit#6364 5977590767; agent-toolkit#6478 applied it to
-# that repository's readers and left this judge's dates as a follow-up, which this is). On a FULL
-# RESIDENT CEILING (`is_full_resident_ceiling`) judged against its own path envelope, a date that
-# has passed refuses nothing. It is still parsed and must be well-formed. Every other block keeps
-# its date, and so does the compiler programme.
+# operator closes the Issue, moves `state` off ACTIVE, or supersedes the block. Elapsed time alone
+# revokes nothing. The operator decided on 2026-10-04 that standing seats are not renewed by hand
+# (agent-toolkit#6364 5977590767), and on 2026-10-26 that a routine admitted change must never wait
+# on his approval because an authority's date passed ("I should not be needed to approve this type
+# of things … this is something that needs to be fixed in the system itself", agent-toolkit#3052
+# 6425439595; agent-toolkit AGENTS.md "Age alone never removes working capacity"). So on ANY block
+# judged against its own path envelope, a date that has passed refuses nothing; it is still parsed
+# and must be well-formed. Only the compiler programme, judged against the policy allowlist rather
+# than an envelope, keeps its date.
 # Short-lived CREDENTIALS (signers above, App tokens) keep their own expiry.
 """The machine route (#3752 Slice A). The trusted workflow — never the candidate — writes one
 ``aeos-actor-evidence/v1`` file: the GitHub-authenticated pull-request author (login, type),
@@ -116,8 +117,8 @@ workflow's own token). The networkless gate then admits a protected diff WITHOUT
 SSH signature when, and only when, every one of these holds: the author is a pinned machine
 principal and not a pinned operator principal; the programme Issue is OPEN, authored by a
 pinned operator principal, and carries a ``standing-authority/v2`` block naming this
-repository and that Issue, ``state: ACTIVE`` and a ``not_after`` that is ``null`` (standing until revoked) or still ahead
-(a full resident ceiling's date ends nothing: see ``is_full_resident_ceiling``); every protected
+repository and that Issue, ``state: ACTIVE`` and a well-formed ``not_after`` (a date ends nothing on a block judged against
+its own envelope; only the compiler programme keeps its date); every protected
 changed path lies inside that block's ``path_envelope``. Anything missing, stale or ambiguous
 fails closed to the SSH route, which stays as the break-glass/transition path. Credential
 reachability alone grants nothing: the App token can open the PR, but only the operator's
@@ -1397,12 +1398,11 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         return MACHINE_ROUTE_AUTHORITY_BLOCK_INVALID
     compiler = policy.authority_compiler
     compiled = compiler is not None and compiler["programme"] == ref
-    # A date that has passed ends every programme authority but one. A full resident ceiling
-    # judged against its OWN path envelope has no calendar end: the seat stands until the
+    # A block judged against its OWN path envelope has no calendar end: it stands until the
     # operator closes the Issue, moves `state` off ACTIVE or supersedes the block, all checked
     # above. The compiler programme is judged against the policy allowlist instead of an
     # envelope, so its date is honoured whatever shape its block has.
-    if not_after is not None and now >= not_after and (compiled or not is_full_resident_ceiling(block)):
+    if not_after is not None and now >= not_after and compiled:
         return MACHINE_ROUTE_AUTHORITY_EXPIRED
     # M5 authority compilation is deliberately a policy-selected interpretation
     # of an *existing* operator programme, not another authority document. It
