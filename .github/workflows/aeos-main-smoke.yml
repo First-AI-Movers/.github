@@ -33,6 +33,26 @@ name: aeos-main-smoke
 
 on:
   workflow_call:
+    inputs:
+      runner_labels:
+        # Where the smoke jobs run (main-smoke, main-smoke-confirm,
+        # main-smoke-parent). Exactly one of two values is accepted, compared
+        # byte-for-byte:
+        #   '["ubuntu-latest"]'                              (default; GitHub-hosted)
+        #   '["self-hosted","linux","x64","aeos-cell"]'      (an AEOS Development Cell)
+        # `runs-on` never reads the value directly: it maps the Cell value to
+        # its own literal and everything else to ubuntu-latest, so no caller can
+        # name an arbitrary runner. The first step of each job then refuses any
+        # other value red (RUNNER_LABELS_REFUSED). A pull request whose head is
+        # not this repository (a fork) always runs on ubuntu-latest.
+        # auto-revert is not routed: it holds the revert App key (aeos/main-smoke.md).
+        type: string
+        required: false
+        default: '["ubuntu-latest"]'
+        description: >-
+          JSON array of runner labels for the smoke jobs. Exactly
+          '["ubuntu-latest"]' (default) or
+          '["self-hosted","linux","x64","aeos-cell"]'.
     secrets:
       AEOS_REVERT_APP_PRIVATE_KEY:
         # Declared so a caller can pass this one secret by name instead of
@@ -65,7 +85,10 @@ concurrency:
 jobs:
   main-smoke:
     name: main-smoke
-    runs-on: ubuntu-latest
+    # The allowlist lives in this expression: only the exact Cell value, on an
+    # event that is not a fork's pull request, selects the Cell literal;
+    # anything else is ubuntu-latest. See inputs.runner_labels.
+    runs-on: ${{ fromJSON(inputs.runner_labels == '["self-hosted","linux","x64","aeos-cell"]' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","linux","x64","aeos-cell"]' || '["ubuntu-latest"]') }}
     # A backstop only, at the platform's ceiling: every step below carries its
     # own bound, and the smoke step is bounded by the budget the repository
     # declares (budget_minutes, default 20, at most 280), which it stops short
@@ -79,6 +102,26 @@ jobs:
       signature: ${{ steps.smoke.outputs.signature }}
       source: ${{ steps.smoke.outputs.source }}
     steps:
+      - name: Refuse a runner label set outside the allowlist
+        timeout-minutes: 1
+        # Before anything is checked out. `runs-on` has already sent any other
+        # value to ubuntu-latest; this makes the misconfiguration red instead of
+        # silently hosted.
+        env:
+          AEOS_RUNNER_LABELS: ${{ inputs.runner_labels }}
+        run: |
+          case "$AEOS_RUNNER_LABELS" in
+            '["ubuntu-latest"]'|'["self-hosted","linux","x64","aeos-cell"]') ;;
+            *)
+              {
+                echo "AEOS_MAIN_SMOKE: RUNNER_LABELS_REFUSED"
+                echo "runner_labels must be exactly [\"ubuntu-latest\"] or"
+                echo "[\"self-hosted\",\"linux\",\"x64\",\"aeos-cell\"]. Nothing was smoked"
+                echo "and the breaker is not engaged."
+              } | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
       - name: Check out the exact SHA under test
         timeout-minutes: 10
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -212,7 +255,10 @@ jobs:
     name: main-smoke-confirm
     needs: main-smoke
     if: always() && github.event_name == 'push' && (needs.main-smoke.outputs.outcome == 'CODE_FAILURE' || needs.main-smoke.outputs.outcome == 'INFRA_UNAVAILABLE')
-    runs-on: ubuntu-latest
+    # The allowlist lives in this expression: only the exact Cell value, on an
+    # event that is not a fork's pull request, selects the Cell literal;
+    # anything else is ubuntu-latest. See inputs.runner_labels.
+    runs-on: ${{ fromJSON(inputs.runner_labels == '["self-hosted","linux","x64","aeos-cell"]' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","linux","x64","aeos-cell"]' || '["ubuntu-latest"]') }}
     # A backstop only, at the platform's ceiling: every step below carries its
     # own bound, and the smoke step is bounded by the budget the repository
     # declares (budget_minutes, default 20, at most 280), which it stops short
@@ -222,6 +268,26 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Refuse a runner label set outside the allowlist
+        timeout-minutes: 1
+        # Before anything is checked out. `runs-on` has already sent any other
+        # value to ubuntu-latest; this makes the misconfiguration red instead of
+        # silently hosted.
+        env:
+          AEOS_RUNNER_LABELS: ${{ inputs.runner_labels }}
+        run: |
+          case "$AEOS_RUNNER_LABELS" in
+            '["ubuntu-latest"]'|'["self-hosted","linux","x64","aeos-cell"]') ;;
+            *)
+              {
+                echo "AEOS_MAIN_SMOKE: RUNNER_LABELS_REFUSED"
+                echo "runner_labels must be exactly [\"ubuntu-latest\"] or"
+                echo "[\"self-hosted\",\"linux\",\"x64\",\"aeos-cell\"]. Nothing was smoked"
+                echo "and the breaker is not engaged."
+              } | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
       - name: Check out the identical SHA
         timeout-minutes: 10
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -315,7 +381,10 @@ jobs:
     name: main-smoke-parent
     needs: main-smoke
     if: always() && github.event_name == 'push' && (needs.main-smoke.outputs.outcome == 'CODE_FAILURE' || needs.main-smoke.outputs.outcome == 'INFRA_UNAVAILABLE')
-    runs-on: ubuntu-latest
+    # The allowlist lives in this expression: only the exact Cell value, on an
+    # event that is not a fork's pull request, selects the Cell literal;
+    # anything else is ubuntu-latest. See inputs.runner_labels.
+    runs-on: ${{ fromJSON(inputs.runner_labels == '["self-hosted","linux","x64","aeos-cell"]' && (!github.event.pull_request || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","linux","x64","aeos-cell"]' || '["ubuntu-latest"]') }}
     # A backstop only, at the platform's ceiling: every step below carries its
     # own bound, and the smoke step is bounded by the budget the repository
     # declares (budget_minutes, default 20, at most 280), which it stops short
@@ -325,6 +394,26 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Refuse a runner label set outside the allowlist
+        timeout-minutes: 1
+        # Before anything is checked out. `runs-on` has already sent any other
+        # value to ubuntu-latest; this makes the misconfiguration red instead of
+        # silently hosted.
+        env:
+          AEOS_RUNNER_LABELS: ${{ inputs.runner_labels }}
+        run: |
+          case "$AEOS_RUNNER_LABELS" in
+            '["ubuntu-latest"]'|'["self-hosted","linux","x64","aeos-cell"]') ;;
+            *)
+              {
+                echo "AEOS_MAIN_SMOKE: RUNNER_LABELS_REFUSED"
+                echo "runner_labels must be exactly [\"ubuntu-latest\"] or"
+                echo "[\"self-hosted\",\"linux\",\"x64\",\"aeos-cell\"]. Nothing was smoked"
+                echo "and the breaker is not engaged."
+              } | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
       - name: Check out the parent commit
         timeout-minutes: 10
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -417,6 +506,11 @@ jobs:
     name: main-smoke-auto-revert
     needs: [main-smoke, confirm, parent-smoke]
     if: always() && github.event_name == 'push' && (needs.main-smoke.outputs.outcome == 'CODE_FAILURE' || needs.main-smoke.outputs.outcome == 'INFRA_UNAVAILABLE') && needs.confirm.result == 'success' && needs.parent-smoke.result == 'success'
+    # Deliberately NOT routed by inputs.runner_labels. This job holds the
+    # revert App's private key and a write token, and a Cell also runs
+    # repository code from the smoke jobs; a GitHub-hosted runner starts every
+    # job from a fresh VM. It runs only after a confirmed failure, within 15
+    # minutes. Moving the key's custody is a separate operator decision.
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

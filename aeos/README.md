@@ -27,6 +27,7 @@ pull-request-body semantics, and no waiting.
 | The changed set itself is readable | `EVIDENCE_UNREADABLE` |
 | The gate body stays inside its own time budget | `BUDGET_EXCEEDED` |
 | The optional `.github/aeos-gate.json`, if present, is valid | `GATE_CONFIG_INVALID` |
+| The optional `AEOS_MERGE_READY_RUNNER_LABELS` Actions variable, if set, is one of the two allowed runner label sets | `GATE_CONFIG_INVALID` |
 
 Failures name the offending path (and line number for a credential shape). A
 matched credential value is never echoed.
@@ -94,10 +95,54 @@ Candidate bytes are data, never code.
   which bytes they are, so the verdict cannot be computed from one tree and
   reported against another.
 - Permissions are `contents: read`. There are no secrets, no
-  `pull_request_target`, no self-hosted runners, and no network calls beyond the
-  two checkouts.
+  `pull_request_target`, and no network calls beyond the two checkouts. The job
+  runs on GitHub-hosted `ubuntu-latest` unless the repository or organization
+  opts into the one allowlisted self-hosted label set, and a fork's pull request
+  never runs anywhere else (see [Where the gate runs](#where-the-gate-runs)).
 - Event values reach the gate as environment variables, never interpolated into
   a shell body.
+
+## Where the gate runs
+
+By default the job runs on GitHub-hosted `ubuntu-latest`. An organization or
+repository can move it onto the AEOS Development Cells, which are registered as
+self-hosted runners with the labels `[self-hosted, linux, x64, aeos-cell]`
+(agent-toolkit #2630), by setting one Actions variable:
+
+```text
+AEOS_MERGE_READY_RUNNER_LABELS = ["self-hosted","linux","x64","aeos-cell"]
+```
+
+A ruleset Required Workflow receives no caller inputs, so a variable is the only
+knob. A repository variable overrides the organization one, as usual.
+
+- **Two values, compared byte for byte.** Unset means `["ubuntu-latest"]`. The
+  only other accepted value is the compact Cell array above, with no spaces.
+- **The allowlist is in the `runs-on` expression.** Only the exact Cell value
+  selects the Cell literal; every other value is `ubuntu-latest`. The variable
+  never names a runner itself. The job's first step then fails any other value
+  as `GATE_CONFIG_INVALID`, so a typo is a typed red, not a quiet fallback.
+- **A fork's pull request always runs on `ubuntu-latest`.** If the pull request's
+  head repository is not the repository under judgment, the Cell value is
+  ignored. A `merge_group` run carries no pull-request head and can run on a
+  Cell; its bytes are read as data either way.
+- **Moving the runner does not change the verdict.** The same trusted policy
+  reads the same candidate bytes as data. The check context is still
+  `aeos-merge-ready`.
+
+What the Cell route assumes, because the verdict is only as trustworthy as the
+machine that computes it:
+
+- **a clean environment per job.** On a GitHub-hosted runner every job starts
+  from a fresh VM. A Cell also runs repository code (the main-smoke rail runs a
+  repository's own commands there). If a later gate job can see what an earlier
+  job wrote, such as a replaced `python3`, `git` or `gh` on `PATH`, that code can
+  shape the gate's verdict. Register Cells as ephemeral runners that start every
+  job from a fresh environment before routing the gate onto them;
+- the toolchain the job uses on `ubuntu-latest`: `python3` with PyYAML, `git`,
+  `gh` and coreutils `timeout`;
+- **capacity.** While no Cell with these labels is online, the job waits in the
+  queue and the pull request has no verdict. That is pending, never green.
 
 ## The control-plane set — and the strict lane
 
