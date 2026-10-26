@@ -1387,15 +1387,19 @@ class AdoptionContractTestCase(unittest.TestCase):
                 self.assertLess(fetch, smoke_at, names)
                 self.assertIn("--declared-history", steps[read]["run"])
                 deepen = steps[fetch]
+                # The shallow checkout of the commit under test is the first checkout, after the
+                # runner-label refusal, which checks nothing out.
+                first = next(s for s in steps if (s.get("uses") or "").startswith("actions/checkout@"))
+                self.assertIs(first, steps[1], names)
                 self.assertEqual(deepen["if"], "steps.history.outputs.history == 'full'")
                 self.assertTrue(deepen["uses"].startswith("actions/checkout@"))
-                self.assertEqual(deepen["uses"], steps[0]["uses"])
+                self.assertEqual(deepen["uses"], first["uses"])
                 self.assertEqual(deepen["with"]["fetch-depth"], 0)
                 self.assertIs(deepen["with"]["persist-credentials"], False)
                 self.assertEqual(deepen["with"]["path"], "repo")
-                self.assertEqual(deepen["with"]["ref"], steps[0]["with"]["ref"],
+                self.assertEqual(deepen["with"]["ref"], first["with"]["ref"],
                                  "the history must be the history of the commit under test")
-                self.assertEqual(steps[0]["with"]["fetch-depth"], 1, "shallow stays the default")
+                self.assertEqual(first["with"]["fetch-depth"], 1, "shallow stays the default")
 
     def test_a_failed_fetch_still_reaches_the_typed_smoke(self) -> None:
         for name in self.SMOKE_JOBS:
@@ -1419,7 +1423,7 @@ class AdoptionContractTestCase(unittest.TestCase):
                           if s.get("if") == "steps.history.outputs.history == 'full'"]
                 others = [s["timeout-minutes"] for s in job["steps"] if s not in runs_smoke
                           and s.get("if") != "steps.history.outputs.history == 'full'"]
-                self.assertEqual(sum(others) + 20, 57, "an undeclared smoke's worst case, as documented")
+                self.assertEqual(sum(others) + 20, 58, "an undeclared smoke's worst case, as documented")
                 # The largest budget with full history still leaves the job room to start and finish.
                 self.assertLessEqual(sum(others) + sum(deepen) + smoke.MAX_BUDGET_MINUTES, 360 - 5)
 

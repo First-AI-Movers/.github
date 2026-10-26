@@ -61,6 +61,54 @@ with a typed `AUTOREVERT_AUTH_UNAVAILABLE` rather than failing quietly.
 3. **The revert App must be installed** on the repository.
 4. **Then** add the caller above, naming the branch you actually push to.
 
+### Running the smoke on a Development Cell
+
+The smoke jobs run on GitHub-hosted `ubuntu-latest` unless the caller asks for an
+AEOS Development Cell, which is registered as a self-hosted runner with the labels
+`[self-hosted, linux, x64, aeos-cell]` (agent-toolkit #2630). The caller passes one
+input:
+
+```yaml
+jobs:
+  smoke:
+    uses: First-AI-Movers/.github/.github/workflows/aeos-main-smoke.yml@main
+    with:
+      runner_labels: '["self-hosted","linux","x64","aeos-cell"]'
+    secrets:
+      AEOS_REVERT_APP_PRIVATE_KEY: ${{ secrets.AEOS_REVERT_APP_PRIVATE_KEY }}
+```
+
+- **Two values, compared byte for byte.** `runner_labels` is a JSON array string.
+  Its default is `'["ubuntu-latest"]'`, so a caller that omits it runs exactly as
+  before. The only other accepted value is `'["self-hosted","linux","x64","aeos-cell"]'`,
+  written compactly as shown, with no spaces.
+- **`runs-on` never reads the value directly.** The expression maps the Cell value
+  to its own literal and every other value to `ubuntu-latest`, so a caller cannot
+  send the smoke to an arbitrary runner. The first step of each routed job then
+  fails any other value red with `RUNNER_LABELS_REFUSED`. Nothing is smoked and the
+  breaker is not engaged. A typo is a visible red, never a silent fallback.
+- **A fork's pull request never reaches a Cell.** The documented caller runs on
+  `push`, but if a caller also triggers on a pull request whose head repository is
+  not this repository, every routed job runs on `ubuntu-latest` whatever the input
+  says.
+- **Routed jobs:** `main-smoke`, `main-smoke-confirm` and `main-smoke-parent`.
+  **`main-smoke-auto-revert` is not routed.** It holds the revert App's private key
+  and a write token, and a Cell also runs repository code from the smoke jobs. It
+  runs only after a confirmed failure, for at most 15 minutes. Moving the key onto
+  Cells is a credential-custody decision for the operator, not part of this input.
+
+What a Cell must provide, and what this rail assumes of it:
+
+- the toolchain the rail uses on `ubuntu-latest`: `python3`, `git`, and, for a
+  repository that pins one, a working `actions/setup-python` tool cache;
+- **a clean environment per job.** `confirm` is a rerun "in a fresh runner". On a
+  persistent runner, state left by an earlier job (including another
+  repository's smoke commands) can make the first run and the confirm run fail
+  the same way, and a later job can see what an earlier one wrote. Register Cells
+  as ephemeral runners that start each job from a fresh environment;
+- **capacity.** A routed job waits in the queue while no Cell with these labels is
+  online. A queued smoke reports nothing yet. It is never a pass.
+
 ## The three outcomes
 
 | Outcome | Meaning | Exit |
@@ -212,8 +260,8 @@ steps only. You should not need `env -u` anything.
   up to the largest budget (16,800), and the budget left caps it. The job's own
   ceiling is the platform's 360 minutes, as a backstop only: every other step
   carries its own bound, and those bounds plus the largest budget fit inside it.
-  An undeclared smoke's worst case is 57 minutes, up from the old 20-minute
-  job, while its normal run is unchanged. A spent budget is never a revert on
+  An undeclared smoke's worst case is 58 minutes (one of them the runner-label
+  check), up from the old 20-minute job, while its normal run is unchanged. A spent budget is never a revert on
   its own: the same reason on the parent is judged inherited, like any repeated
   outage. A declared budget is runner time spent on every push, and three
   times over when a failure is confirmed; declare what the suite measurably
@@ -247,7 +295,9 @@ credential to print; the redaction is the second lock on that door.
 On `CODE_FAILURE`, and on `INFRA_UNAVAILABLE` so that a repeated outage can be
 seen (an outage on one commit still never reverts anything):
 
-1. **confirm** — rerun the identical smoke on the identical SHA in a fresh runner;
+1. **confirm** — rerun the identical smoke on the identical SHA in a fresh runner
+   (on a Cell, only as fresh as the Cell's isolation; see
+   [Running the smoke on a Development Cell](#running-the-smoke-on-a-development-cell));
 2. **parent-smoke** — smoke the parent (`before`), so an inherited failure is
    never attributed to an innocent later squash;
 3. **decide** — deterministic and typed, with no model.
