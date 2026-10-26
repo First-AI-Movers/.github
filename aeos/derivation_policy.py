@@ -1285,11 +1285,8 @@ def served_resident_admits(body, ref, paths) -> bool:
     return all(_within_envelope(path, block["path_envelope"]) for path in paths)
 
 
-def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | None,
-                  repository: str, entries: list[Entry], now: float, head_sha: str | None = None,
-                  admission: dict | None = None) -> str | None:
-    """``None`` when the machine route admits this protected diff; otherwise the ONE typed
-    reason it does not. Every conjunct is checked; the first failure names the reason."""
+def machine_identity_refusal(policy, evidence, evidence_reason, repository):
+    """Shared identity conjuncts before any machine admission route."""
     if not policy.machine_route_enabled:
         return MACHINE_ROUTE_DISABLED
     if evidence is None:
@@ -1317,6 +1314,18 @@ def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | 
         return MACHINE_ROUTE_HEAD_COMMIT_NOT_MACHINE
     if (evidence.get("repository") or "").strip().lower() != repository.strip().lower():
         return MACHINE_ROUTE_REPOSITORY_MISMATCH
+    return None
+
+
+def machine_route(policy: Policy, evidence: dict | None, evidence_reason: str | None,
+                  repository: str, entries: list[Entry], now: float, head_sha: str | None = None,
+                  admission: dict | None = None) -> str | None:
+    """``None`` when the machine route admits this protected diff; otherwise the ONE typed
+    reason it does not. Every conjunct is checked; the first failure names the reason."""
+    identity = machine_identity_refusal(policy, evidence, evidence_reason, repository)
+    if identity is not None:
+        return identity
+    pr = evidence["pull_request"]
     # #3052 Class B: grant-marker presence is decided BEFORE any programme-specific routing. A pull request
     # that names a scoped machine grant is judged only by the scoped-grant judge, under the one compiler
     # programme its binding names; with no binding, or a disabled one, it refuses whatever programme it

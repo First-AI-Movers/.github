@@ -59,6 +59,7 @@ import operator_approval  # noqa: E402
 # --------------------------------------------------------------------------
 # Closed reason-code vocabulary. Nothing outside this tuple is ever emitted.
 # --------------------------------------------------------------------------
+TAILNET_POLICY_CHANGE_NOT_ADMITTED = "TAILNET_POLICY_CHANGE_NOT_ADMITTED"
 CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR = "CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR"
 CONTROL_PLANE_PROOF_FAILED = "CONTROL_PLANE_PROOF_FAILED"
 WORKFLOW_POLICY_VIOLATION = "WORKFLOW_POLICY_VIOLATION"
@@ -75,6 +76,7 @@ GATE_CONFIG_INVALID = "GATE_CONFIG_INVALID"
 REASON_CODES = (
     EVIDENCE_UNREADABLE,
     GATE_CONFIG_INVALID,
+    TAILNET_POLICY_CHANGE_NOT_ADMITTED,
     CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR,
     CONTROL_PLANE_PROOF_FAILED,
     DERIVATION_POLICY_DIFF_UNSIGNED,
@@ -1011,6 +1013,72 @@ class Report:
         self.primary = self.findings[0].code if self.findings else None
 
 
+def identified_operator(policy, evidence):
+    """The policy-repository lock-5 authorship and run-actor rule."""
+    if policy is None or not isinstance(evidence, dict):
+        return False
+    pull = evidence.get("pull_request")
+    if not isinstance(pull, dict):
+        return False
+    operators = set(policy.operator_principals)
+    author, kind, actor = pull.get("author_login"), pull.get("author_type"), evidence.get("actor")
+    return (isinstance(author, str) and author in operators and kind == "User"
+            and isinstance(actor, str) and actor in operators)
+
+
+def tailnet_class_admits(entries):
+    # Porting the section-1 class checker is a later change.
+    return False
+
+
+def tailnet_predicate(report, candidate_dir, repository, base, head, event, policy_dir, evidence_path, now):
+    """Additional conjunct; inert outside the one repository, including all policy/evidence reads."""
+    import accepted_change
+    import scoped_grant
+    if (repository or "").strip().lower() != accepted_change.TAILNET_REPOSITORY:
+        return
+    changes = derivation_policy.raw_diff(candidate_dir, base, head)
+    touched = derivation_policy.touched_paths(changes)
+    entries = [entry for _, entry in derivation_policy._select(changes, lambda path: path in touched)]
+    non_docs = sorted({path for entry in entries for path in (entry.path, entry.rename_from)
+                       if path is not None and (not path.lower().endswith(".md")
+                       or path.lower().startswith(".github/")
+                       or not scoped_grant._regular_file_entry(entry))})
+    if not non_docs or tailnet_class_admits(entries):
+        return
+    policy = derivation_policy.load_policy(policy_dir)
+    evidence, evidence_reason = derivation_policy.load_evidence(evidence_path, candidate_dir=candidate_dir)
+    reason = "no admission"
+    if event != "merge_group" and policy is not None:
+        # No authorship route here (ADR section 2): a contents writer can push into an operator-authored pull
+        # request, and a run actor does not prove who decided these exact bytes. The operator decides by
+        # approving the exact head.
+        reason = operator_approval.refusal(policy, evidence, repository, head)
+        if reason is None:
+            report.approval_dependent = True
+            return
+        # Gitlinks need not exist in this object store and can never satisfy an acceptance.
+        if any(mode == "160000" for entry in entries for mode in (entry.pre_mode, entry.post_mode)):
+            report.findings.append(Finding(TAILNET_POLICY_CHANGE_NOT_ADMITTED, non_docs[0],
+                                           f"tailnet-policy path {non_docs[0]!r} not admitted: {reason}"))
+            return
+        entries, _ = derivation_policy.protected_diff(candidate_dir, base, head, set(touched), changes=changes)
+        digest = derivation_policy.protected_diff_digest(entries)
+        accepted = accepted_change.entry_for(policy.accepted_changes, repository, digest)
+        if accepted is not None:
+            reason = derivation_policy.machine_identity_refusal(policy, evidence, evidence_reason, repository)
+            if reason is None:
+                if scoped_grant.marker_state(evidence["pull_request"].get("body", "")) != scoped_grant.MARKER_ABSENT:
+                    reason = scoped_grant.SCOPED_GRANT_UNBOUND
+                else:
+                    reason = accepted_change.refusal(accepted, evidence, entries=entries, now=now())
+            if reason is None:
+                report.accepted_change = {"repository": accepted["repository"], "protected_diff_sha256": digest}
+                return
+    report.findings.append(Finding(TAILNET_POLICY_CHANGE_NOT_ADMITTED, non_docs[0],
+                                   f"tailnet-policy path {non_docs[0]!r} not admitted: {reason}"))
+
+
 def evaluate(
     candidate_dir: str,
     repository: str,
@@ -1066,6 +1134,14 @@ def evaluate(
     except Exception as exc:  # noqa: BLE001 - see _abort
         return _abort(report, elapsed(), "evaluating the derivation policy", exc)
 
+    try:
+        tailnet_predicate(report, candidate_dir, repository, base_sha, head_sha, event_name,
+                          policy_dir, evidence_path, now)
+    except derivation_policy.PolicyError as exc:
+        report.findings.append(Finding(exc.code, exc.path, exc.detail))
+    except Exception as exc:
+        return _abort(report, elapsed(), "evaluating tailnet-policy admission", exc)
+
     # A control-plane path no longer short-circuits to a human verdict. It enters
     # the STRICT lane instead (#3311): the candidate's bytes are measured against
     # floors specific to the merge-control surface it changes, by the trusted
@@ -1090,22 +1166,20 @@ def evaluate(
             judge_policy = derivation_policy.load_policy(policy_dir)
         except derivation_policy.PolicyError:
             judge_policy = None
-        operators = set(judge_policy.operator_principals) if judge_policy else set()
         evidence, _reason = derivation_policy.load_evidence(evidence_path, candidate_dir=candidate_dir)
         if isinstance(evidence, dict):
             pull = evidence.get("pull_request") if isinstance(evidence.get("pull_request"), dict) else {}
             author, kind, actor = pull.get("author_login"), pull.get("author_type"), evidence.get("actor")
-            identified_operator = (isinstance(author, str) and author in operators and kind == "User"
-                                   and isinstance(actor, str) and actor in operators)
+            operator_identified = identified_operator(judge_policy, evidence)
             # #3052 paperwork removal: the machine may carry the mechanics of a judge change only when a pinned
             # operator approved exactly this head. The decision stays his; the machine never approves.
             approval = None
-            if not identified_operator:
+            if not operator_identified:
                 approval = (operator_approval.refusal(judge_policy, evidence, repository, head_sha)
                             if judge_policy is not None else operator_approval.OPERATOR_APPROVAL_UNBOUND)
-            if not identified_operator and approval is None:
+            if not operator_identified and approval is None:
                 report.approval_dependent = True
-            if not identified_operator and approval is not None:
+            if not operator_identified and approval is not None:
                 report.findings.append(Finding(
                     CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, sorted(report.control_plane)[0],
                     "only a positively identified operator, or his approval of this exact machine-authored "

@@ -84,7 +84,7 @@ class ValidationTests(unittest.TestCase):
         shipped = dp.parse_policy(POLICY_FILE.read_bytes())
         for item in shipped.accepted_changes:
             with self.subTest(digest=item["protected_diff_sha256"][:12]):
-                self.assertEqual(item["repository"].lower(), shipped.target_repository)
+                self.assertIn(item["repository"].lower(), (shipped.target_repository, ac.TAILNET_REPOSITORY))
                 self.assertLessEqual(epoch(item["not_after"]) - epoch(item["issued_at"]), ac.MAX_LIFETIME_SECONDS)
 
     def test_the_trust_machinery_may_be_accepted_exactly_but_no_control_plane_ever(self):
