@@ -17,9 +17,12 @@ The second is why a change here is not ordinary.
 
 ## `aeos/` decides whether every other repository may merge
 
-`aeos-merge-ready` is injected as a **Required Workflow** by the organization
-ruleset onto every repository in the organization. A change to `aeos/` changes
-what is allowed to merge in all of them at once.
+Every other repository's one required merge check is the App check `aeos-merge-judge`
+(GitHub App 5453110, run in judge custody on a Development Cell; organization ruleset
+22118963 has injected no Required Workflow since 2026-10-25). The judge evaluates this
+repository's `aeos/` policy at `main` against the candidate, exactly as
+`aeos-merge-ready` does here. A change to `aeos/` therefore still changes what is allowed
+to merge in every repository at once.
 
 Three properties hold, and none of them may be weakened:
 
@@ -41,7 +44,8 @@ Three properties hold, and none of them may be weakened:
 
 Open the PR **ready**, arm squash auto-merge **in the same step while the gate is
 still pending** (GitHub refuses to arm an already-mergeable PR), do not request
-review, do not wait. `aeos-merge-ready` is the one merge-blocking verdict.
+review, do not wait. In this repository `aeos-merge-ready` is the one merge-blocking verdict;
+in every other repository it is the App check `aeos-merge-judge`.
 
 **Two exceptions, both deliberate, both in this repository only.** Each fails with
 `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR`:
