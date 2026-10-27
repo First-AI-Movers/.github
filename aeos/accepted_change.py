@@ -25,10 +25,11 @@ change, and it is not admitted. A machine-authored carrier is admitted when:
   approval collector's ``CURRENT`` context);
 * every protected path is a regular file on every side that exists.
 
-An entry never lists anything under ``.github/`` or ``aeos/`` (a repository's control plane and its manifest slot)
-or a path outside the derivation allowlist: the policy refuses to load one that does. Revocation is the policy entry
-itself: ``activation: disabled`` or removal. The executor cannot add, widen or renew an entry: each is a change to
-this repository's ``aeos/``, which only the operator decides.
+An agent-toolkit entry never lists anything under ``.github/`` or ``aeos/`` (a repository's control plane and its
+manifest slot) or a path outside the derivation allowlist: the policy refuses to load one that does. Revocation is
+the policy entry itself: ``activation: disabled`` or removal. Tailnet-policy entries instead bind every changed
+path, including workflow paths, without the toolkit derivation allowlist. The executor cannot add, widen or renew
+an entry: each is a change to this repository's ``aeos/``, which only the operator decides.
 
 A pass that rests on an entry records it, and the trusted workflow re-reads the pull request's context and then,
 last, current policy just before publishing (``withdrawn``): an entry revoked, disabled or expired meanwhile never publishes a
@@ -44,6 +45,7 @@ import re
 
 import scoped_grant
 
+TAILNET_REPOSITORY = "first-ai-movers/tailnet-policy"
 SCHEMA = "aeos-accepted-change/v1"
 ACTIVATIONS = ("enabled", "disabled")
 ENTRY_KEYS = frozenset({"schema", "repository", "protected_diff_sha256", "paths", "issued_at", "not_after",
@@ -99,7 +101,7 @@ def _stamp(value):
 
 def validate(entries, *, target_repository, in_allowlist) -> None:
     """``ValueError`` unless ``entries`` is a list of well-formed, short-lived acceptances for ``target_repository``
-    whose paths stay inside the derivation allowlist and outside every control plane."""
+    or tailnet-policy; toolkit paths stay inside the derivation allowlist and outside every control plane."""
     if not isinstance(entries, list) or len(entries) > MAX_ENTRIES:
         raise ValueError("accepted_changes must be a list")
     seen = set()
@@ -108,12 +110,12 @@ def validate(entries, *, target_repository, in_allowlist) -> None:
             raise ValueError(f"each accepted change is exactly {sorted(ENTRY_KEYS)} with schema {SCHEMA}")
         repository = entry["repository"]
         if (not isinstance(repository, str) or not _REPO.fullmatch(repository)
-                or repository.lower() != target_repository):
-            raise ValueError("accepted change must name the policy's target repository")
+                or repository.lower() not in (target_repository, TAILNET_REPOSITORY)):
+            raise ValueError("accepted change must name the policy target repository or tailnet-policy")
         digest = entry["protected_diff_sha256"]
-        if not isinstance(digest, str) or not _DIGEST.fullmatch(digest) or digest in seen:
+        if not isinstance(digest, str) or not _DIGEST.fullmatch(digest) or (repository.lower(), digest) in seen:
             raise ValueError("accepted change must carry a unique lower-case SHA-256 protected-diff digest")
-        seen.add(digest)
+        seen.add((repository.lower(), digest))
         if entry["activation"] not in ACTIVATIONS:
             raise ValueError("accepted change activation must be enabled or disabled")
         issued, not_after = _stamp(entry["issued_at"]), _stamp(entry["not_after"])
@@ -127,7 +129,8 @@ def validate(entries, *, target_repository, in_allowlist) -> None:
                 or not all(_exact_path(p) for p in paths) or len(set(paths)) != len(paths)):
             raise ValueError("accepted change paths must list 1..32 exact, unique paths")
         for path in paths:
-            if path.lower().startswith(EXCLUDED_PREFIXES) or not in_allowlist(path):
+            if repository.lower() != TAILNET_REPOSITORY and (
+                    path.lower().startswith(EXCLUDED_PREFIXES) or not in_allowlist(path)):
                 raise ValueError(f"accepted change path {path!r} may never be accepted")
 
 

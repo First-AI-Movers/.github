@@ -290,7 +290,7 @@ jobs:
                   machines = {login for login, _kind in policy.machine_principals} if policy is not None else set()
                   # A merge-group event carries no pull-request author, and an acceptance can admit one: in the
                   # target repository it always fails closed.
-                  if (policy is None or repo.strip().lower() != policy.target_repository
+                  if (policy is None or repo.strip().lower() not in (policy.target_repository, accepted_change.TAILNET_REPOSITORY)
                           or (os.environ.get("AEOS_EVENT_NAME", "") != "merge_group"
                               and os.environ.get("AEOS_EVENT_AUTHOR", "") not in machines)):
                       sys.exit(0)

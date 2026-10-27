@@ -511,8 +511,8 @@ A machine-authored pull request is admitted under an entry when all of these hol
   approval collector's `CURRENT` context);
 - every protected path is a regular file on every side that exists.
 
-The policy refuses to load an entry that:
-- names another repository;
+For agent-toolkit, the policy refuses to load an entry that:
+- names an unsupported repository;
 - lists anything under `.github/` or `aeos/`;
 - lists a path outside the derivation allowlist;
 - lives longer than seven days (`not_after` at most `issued_at` plus 7 days).
@@ -530,7 +530,7 @@ accepted protected change before this verdict publishes" then works in this orde
 An entry revoked, disabled or expired before that final read, or a head or description that moved, fails the run
 instead of publishing a success. So does an acceptance-dependent pass whose evidence cannot be read. A marker that
 cannot be read fails closed for a machine-authored pull request, or any merge-group event, in the policy's target
-repository, the only places an acceptance can exist. That is judged from the event itself, not from the evidence
+repository or tailnet-policy, the places an acceptance can exist. That is judged from the event itself, not from the evidence
 file.
 
 The route admits only when the evidence carries the capability `accepted_change_barrier:
@@ -722,3 +722,26 @@ python3 -m unittest discover -s aeos/tests -p 'test_*.py' -v
 ```
 
 Programme reference: AEOS `AUTONOMOUS-MAIN-2031`.
+
+### Tailnet-policy merge admission
+
+For `First-AI-Movers/tailnet-policy` the judge adds an admission predicate over
+all changed paths, including both sides of renames and deletions. Documentation
+alone passes when every path ends in `.md`, lies outside `.github/` (both checks
+ignore case), and is a regular file on every existing side. The section-1 class
+hook currently admits nothing. Other changes require exact-head operator
+approval of a machine-authored head, or an exact acceptance in trusted policy's
+existing `machine_route.accepted_changes`. Authorship is not an admission here:
+a contents writer can push into an operator-authored pull request, so an
+operator's own non-documentation change reaches `main` through one of those two
+routes. Merge-group non-documentation changes refuse.
+
+Tailnet acceptances allow exact workflow and policy paths, without the toolkit
+allowlist, and bind the canonical digest of the full changed set. They retain
+the shared machine identities, unmarked body, current context, publication
+barrier, regular-file checks, activation and seven-day maximum lifetime. Entries
+are repository-bound. The existing publication recheck reads current policy on
+main and withholds an acceptance-dependent pass after withdrawal, disabling or
+expiry; an unreadable marker fails closed for machine PRs and merge groups here
+too. Approval-dependent passes use the existing approval recheck. All generic
+floors still run, and other repositories incur no tailnet-specific reads.
