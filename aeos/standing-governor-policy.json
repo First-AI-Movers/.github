@@ -258,6 +258,84 @@
         "not_after": "2026-11-02T22:40:06Z",
         "activation": "enabled",
         "decision": "The operator's Approve of this change (agent-toolkit #3052, ADR:tailnet-policy-machine-mergeable-change-class A1.2): tailnet-policy's prepared pull-request identity split, its workflow, AGENTS.md and boundary test, carried byte for byte by the machine."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "246eedd97e5d06490f945979c0a365f952e6a6b0786999d04886b4080f0cf87b",
+        "paths": [
+          "scripts/agent_relay/standing_seat/seat.py",
+          "scripts/agent_relay/standing_seat_governor.py"
+        ],
+        "issued_at": "2026-10-28T10:45:11Z",
+        "not_after": "2026-11-04T10:45:11Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 11239's exact protected change, a standing-seat Governor generation that can run on the Codex subscription (it replaced PR 9804)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "a7974548a294b064ad002642e4a613bcd28c581d170194ff01f8313c3624f2e8",
+        "paths": [
+          "scripts/agent_relay/integrate.py",
+          "scripts/agent_relay/receipt_compiler.py",
+          "scripts/agent_relay/receipt_execution.py",
+          "scripts/agent_relay/receipt_pack_policy.py",
+          "scripts/agent_relay/write_lane_execute.py"
+        ],
+        "issued_at": "2026-10-28T10:45:11Z",
+        "not_after": "2026-11-04T10:45:11Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 10077's exact protected change, the team factory commissioning independent review by consequence."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "4b5004b93aee34872355454994ce0a86730bb9be3ddb7b96dd0171efc3251c02",
+        "paths": [
+          "scripts/agent_relay/full_cycle_controller.py"
+        ],
+        "issued_at": "2026-10-28T10:45:11Z",
+        "not_after": "2026-11-04T10:45:11Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 11275's exact protected change, an ordinary merged PR that waits on neither the residual-sweep window nor a closeout authority (it replaced PR 7978)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "6f84c0334dc43dab3671eef43a51f302ef2d3cb5e441e99a658775f6cde43dd9",
+        "paths": [
+          "scripts/agent_relay/dispatcher.py"
+        ],
+        "issued_at": "2026-10-28T10:45:11Z",
+        "not_after": "2026-11-04T10:45:11Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 11273's exact protected change, an aged unbound commission that stays selectable and is labelled stale (it replaced PR 7976)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "1db4c2386afafd7bf1f097692f640e3b5626aac48f764feff73490d6d1c3320b",
+        "paths": [
+          "scripts/flight_deck/governed_sessions.py"
+        ],
+        "issued_at": "2026-10-28T10:45:11Z",
+        "not_after": "2026-11-04T10:45:11Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 11274's exact protected change, Noah folding one standing seat's resident and parked turn into one Governor (it replaced PR 8498)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "0ed2b840a19c85bba40510f51e61486a704ff49ae44df4648dc5d5296a3f7223",
+        "paths": [
+          "scripts/agent_relay/standing_seat/seat.py",
+          "scripts/agent_relay/standing_seat_governor.py"
+        ],
+        "issued_at": "2026-10-28T10:45:11Z",
+        "not_after": "2026-11-04T10:45:11Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): the exact protected change of agent-toolkit PR 8788 rebuilt on PR 11239's protected bytes, three Conductor seat fixes, opened once PR 11239 lands."
       }
     ]
   }
