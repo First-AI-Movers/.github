@@ -356,18 +356,6 @@
       },
       {
         "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "5138a155b12bc4ddb6fb5bd055d0145ccb0463c6df5a2b23e39ab48357b5c080",
-        "paths": [
-          "scripts/flight_deck/node_resources.py"
-        ],
-        "issued_at": "2026-10-30T08:35:56Z",
-        "not_after": "2026-11-06T08:35:56Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6518463292): agent-toolkit PR 13085's exact protected change: a repository-changes reading that would push a node's detail past the node-detail budget is omitted, so the node still reads (agent-toolkit #12144, Dev02 regression from PR 12552)."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/tailnet-policy",
         "protected_diff_sha256": "11cd031545a33289a0a7c0b9bf1148e22eb55a55889b2478916c2f1c9a02670d",
         "paths": [
@@ -379,6 +367,18 @@
         "not_after": "2026-11-06T08:47:00Z",
         "activation": "enabled",
         "decision": "The operator's Approve of this change (agent-toolkit #3052, ADR:tailnet-policy-machine-mergeable-change-class A1.2, mission #9615): tailnet-policy PR 27's exact change, credential-free offline PR validation of policy.hujson, its workflow, AGENTS.md and README.md, carried byte for byte by the machine."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "0f7db15a83b1b0abd5d70f10708022135fc42a0d25342947d76755d59285d799",
+        "paths": [
+          "scripts/flight_deck/governed_sessions.py"
+        ],
+        "issued_at": "2026-10-30T14:13:39Z",
+        "not_after": "2026-11-06T14:13:39Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6524620940): agent-toolkit PR 13364's exact protected change: a roster failure whose error names a home path stays a visible row instead of blanking every governed lane (agent-toolkit #2894). It also drops the entry for PR 13085, whose carrier closed unmerged after its owner withdrew it."
       }
     ]
   }
