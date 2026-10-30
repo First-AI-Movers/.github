@@ -33,11 +33,15 @@ It is projection-only: it grants no authority, mutates no ruleset, and installs 
 
 This repository also holds the organization's own merge automation, because a
 required workflow can only be served from a repository every target can read —
-and only this one is public.
+and only this one is public. Until 2026-10-25 that workflow was injected onto
+every organization repository as a Required Workflow. Since then, every other
+repository's one required merge check is the App check `aeos-merge-judge`
+(GitHub App 5453110); this repository keeps the hosted workflow as its own
+merge-blocking verdict (ruleset 24489908).
 
 | Rail | What it does |
 |---|---|
-| [`.github/workflows/aeos-merge-ready.yml`](./.github/workflows/aeos-merge-ready.yml) | the **required** pre-merge verdict, injected onto every organization repository by ruleset as a Required Workflow. Trusted policy from this repository's `main` evaluates the candidate's changed bytes as data, inside a 60-second ceiling, and reports one typed reason on failure — see [`aeos/README.md`](./aeos/README.md) |
+| [`.github/workflows/aeos-merge-ready.yml`](./.github/workflows/aeos-merge-ready.yml) | this repository's merge-blocking pre-merge verdict (Required Workflow here only). Trusted policy from this repository's `main` evaluates the candidate's changed bytes as data, inside a 60-second ceiling, and reports one typed reason on failure — the App check `aeos-merge-judge` evaluates the same policy in every other repository; see [`aeos/README.md`](./aeos/README.md) |
 | [`.github/workflows/aeos-main-smoke.yml`](./.github/workflows/aeos-main-smoke.yml) | post-merge smoke of the exact merged SHA, plus the deterministic circuit breaker and automatic revert — see [`aeos/main-smoke.md`](./aeos/main-smoke.md) for the ~12-line per-repository caller |
 
 Both rails are repository-agnostic: they depend on no file existing in the

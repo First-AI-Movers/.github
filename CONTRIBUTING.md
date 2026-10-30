@@ -18,7 +18,7 @@ The organization ruleset **Protect main branches** governs the default branch of
 - **The default branch cannot be deleted, and it cannot be force-pushed.**
 - **Linear history is required** on the default branch.
 
-**One required check applies organization-wide.** `aeos-merge-ready` is injected onto every repository by the organization ruleset as a **Required Workflow**, served from this repository: a deterministic pre-merge verdict where trusted policy evaluates your changed bytes as data inside a 60-second ceiling and reports one typed reason on failure. It reads no review threads and waits for nothing.
+**One required check applies organization-wide.** Since 2026-10-25 that check is the App check `aeos-merge-judge` (GitHub App 5453110). Until then, `aeos-merge-ready` was injected onto every repository by the organization ruleset as a **Required Workflow**, served from this repository. In this `.github` repository, `aeos-merge-ready` remains the merge-blocking verdict. The check is a deterministic pre-merge verdict where trusted policy evaluates your changed bytes as data inside a 60-second ceiling and reports one typed reason on failure. It reads no review threads and waits for nothing.
 
 Ruleset coverage is applied per repository and can lag behind a newly created one, and a repository may add **further** required checks of its own on top of the organization's. To see exactly what applies where you are working, read **Settings → Rules**, or ask GitHub directly:
 
