@@ -371,14 +371,14 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "0f7db15a83b1b0abd5d70f10708022135fc42a0d25342947d76755d59285d799",
+        "protected_diff_sha256": "b468e0cc768d21641f4ffe5b80aacaa038d128367c7fcb9cddd21049781e31fc",
         "paths": [
-          "scripts/flight_deck/governed_sessions.py"
+          "scripts/agent_relay/standing_seat_governor.py"
         ],
-        "issued_at": "2026-10-30T14:13:39Z",
-        "not_after": "2026-11-06T14:13:39Z",
+        "issued_at": "2026-10-30T17:33:19Z",
+        "not_after": "2026-11-06T17:33:19Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6524620940): agent-toolkit PR 13364's exact protected change: a roster failure whose error names a home path stays a visible row instead of blanking every governed lane (agent-toolkit #2894). It also drops the entry for PR 13085, whose carrier closed unmerged after its owner withdrew it."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6529171130): agent-toolkit PR 13583's exact protected change: a Codex standing Governor is told to read its complete-data index with read-only shell commands, so Noah's seat on Codex reads its context (agent-toolkit #2894). It also drops the spent entry for PR 13364, which merged."
       }
     ]
   }
