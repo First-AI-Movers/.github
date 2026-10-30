@@ -341,6 +341,20 @@
         "not_after": "2026-11-06T07:47:26Z",
         "activation": "enabled",
         "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6515064803): agent-toolkit PR 13028's exact protected change: a standing seat rolls back a failed log append and moves a torn log tail aside, so a full disk cannot leave it blind."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/tailnet-policy",
+        "protected_diff_sha256": "11cd031545a33289a0a7c0b9bf1148e22eb55a55889b2478916c2f1c9a02670d",
+        "paths": [
+          ".github/workflows/tailscale-policy.yml",
+          "AGENTS.md",
+          "README.md"
+        ],
+        "issued_at": "2026-10-30T08:47:00Z",
+        "not_after": "2026-11-06T08:47:00Z",
+        "activation": "enabled",
+        "decision": "The operator's Approve of this change (agent-toolkit #3052, ADR:tailnet-policy-machine-mergeable-change-class A1.2, mission #9615): tailnet-policy PR 27's exact change, credential-free offline PR validation of policy.hujson, its workflow, AGENTS.md and README.md, carried byte for byte by the machine."
       }
     ]
   }
