@@ -353,6 +353,20 @@
         "not_after": "2026-11-06T08:35:56Z",
         "activation": "enabled",
         "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6518463292): agent-toolkit PR 13085's exact protected change: a repository-changes reading that would push a node's detail past the node-detail budget is omitted, so the node still reads (agent-toolkit #12144, Dev02 regression from PR 12552)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/tailnet-policy",
+        "protected_diff_sha256": "11cd031545a33289a0a7c0b9bf1148e22eb55a55889b2478916c2f1c9a02670d",
+        "paths": [
+          ".github/workflows/tailscale-policy.yml",
+          "AGENTS.md",
+          "README.md"
+        ],
+        "issued_at": "2026-10-30T08:47:00Z",
+        "not_after": "2026-11-06T08:47:00Z",
+        "activation": "enabled",
+        "decision": "The operator's Approve of this change (agent-toolkit #3052, ADR:tailnet-policy-machine-mergeable-change-class A1.2, mission #9615): tailnet-policy PR 27's exact change, credential-free offline PR validation of policy.hujson, its workflow, AGENTS.md and README.md, carried byte for byte by the machine."
       }
     ]
   }
