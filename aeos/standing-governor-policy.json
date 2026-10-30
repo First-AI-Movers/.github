@@ -181,6 +181,18 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "ac2a4a0a83ae4f900794d6e98a77ccb8814e29c5d60640000077d99e9ca4acb7",
+        "paths": [
+          "scripts/agent_relay/auto_candidates.py"
+        ],
+        "issued_at": "2026-10-30T12:52:48Z",
+        "not_after": "2026-11-06T12:52:48Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6523100383): agent-toolkit PR 13290's exact protected change: listener reconstruction evidence survives fires under an exact version-bound key, so an unchanged Issue costs no GraphQL and the machine installation stops running dry every hour."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "0ef389ac9b1e2090b9fb3f247d6c2658cb1937799fa4b90310d67f00cd517e1e",
         "paths": [
           "scripts/flight_deck/control_admission.py"
