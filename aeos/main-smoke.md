@@ -49,8 +49,12 @@ with a typed `AUTOREVERT_AUTH_UNAVAILABLE` rather than failing quietly.
 
 ### Before adopting, in this order
 
-1. **`aeos-merge-ready` must already be required on the repository.** Not a
-   preference — a precondition. The revert is an ordinary pull request with
+1. **The repository's required merge check must already be in force.** In every
+   other First-AI-Movers repository that is the App check `aeos-merge-judge`
+   (GitHub App 5453110). In this `.github` repository it is the hosted
+   `aeos-merge-ready` workflow. Until 2026-10-25 the hosted workflow was the
+   organization-wide Required Workflow; it is not injected anywhere else now.
+   Not a preference — a precondition. The revert is an ordinary pull request with
    `--auto --squash` armed, so on a repository with no required checks it merges
    **immediately and unjudged**. "The default branch is never pushed directly"
    then becomes a distinction without a difference: the net effect is an
@@ -372,7 +376,7 @@ before.
 ### Executing a revert
 
 The revert is an **ordinary pull request**: a branch, squash auto-merge armed,
-judged by the required `aeos-merge-ready` gate like anything else. The default
+judged by the repository's required merge check (`aeos-merge-judge` in every other repository; `aeos-merge-ready` here) like anything else. The default
 branch is **never** pushed directly. A revert that does not apply cleanly is the
 typed hard stop `REVERT_CONFLICT` — no branch, no pull request, no guess.
 
@@ -408,7 +412,7 @@ configuration. Each one degrades to a typed red rather than to a silent green:
 
 | Assumption | If unmet |
 | --- | --- |
-| `aeos-merge-ready` is required on the repository | nothing fails — the revert merges immediately and unjudged (see the adoption order above) |
+| the repository's required merge check is in force (`aeos-merge-judge` elsewhere; `aeos-merge-ready` here) | nothing fails — the revert merges immediately and unjudged (see the adoption order above) |
 | the branch pushed to is the one named in the caller | the caller simply never fires |
 | the organization's App id and key are visible to it | `AUTOREVERT_AUTH_UNAVAILABLE` — decision recorded, not executed |
 | the App is *installed* on the repository | the token mint fails with the action's own error — **not** one of the typed stops |

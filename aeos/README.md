@@ -1,10 +1,15 @@
 # `aeos-merge-ready` — organization merge-ready gate
 
-This directory holds the trusted policy behind the organization required
-workflow [`.github/workflows/aeos-merge-ready.yml`](../.github/workflows/aeos-merge-ready.yml).
+This directory holds the trusted policy behind
+[`.github/workflows/aeos-merge-ready.yml`](../.github/workflows/aeos-merge-ready.yml),
+this repository's Required Workflow. Since 2026-10-25 every other First-AI-Movers
+repository's one required merge check is the App check `aeos-merge-judge`
+(GitHub App 5453110), which evaluates this same policy; until then the hosted
+workflow was injected organization-wide as a Required Workflow.
 
-It publishes one check context, named exactly **`aeos-merge-ready`**. Rulesets
-and auto-merge read that string, so renaming the job silently detaches them.
+It publishes one check context, named exactly **`aeos-merge-ready`**. This
+repository's ruleset and auto-merge read that string, so renaming the job
+silently detaches them.
 
 ## What it is
 
