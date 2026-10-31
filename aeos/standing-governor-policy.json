@@ -240,30 +240,28 @@
       },
       {
         "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/tailnet-policy",
-        "protected_diff_sha256": "ecc0c944b2e7b11af2c499482a6fb05efe19932f339e115a499c781026c1eab9",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "30b9b1676fca81cc412f0a4bdab8b0a864aba375b4d8295243e583be3305a0f6",
         "paths": [
-          ".github/workflows/tailscale-policy.yml",
-          "AGENTS.md",
-          "tests/pr_identity_boundary.py"
+          "scripts/agent_relay/grok_session_telemetry.py",
+          "scripts/agent_relay/standing_seat_governor.py"
         ],
-        "issued_at": "2026-10-26T22:40:06Z",
-        "not_after": "2026-11-02T22:40:06Z",
+        "issued_at": "2026-10-31T15:15:53Z",
+        "not_after": "2026-11-07T15:15:53Z",
         "activation": "enabled",
-        "decision": "The operator's Approve of this change (agent-toolkit #3052, ADR:tailnet-policy-machine-mergeable-change-class A1.2): tailnet-policy's prepared pull-request identity split, its workflow, AGENTS.md and boundary test, carried byte for byte by the machine."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff 6543252346): agent-toolkit PR 14022's exact protected change: Grok progress binds its running child's native session, and watchdog and standdown stops reap the whole descendant tree (#3732). It replaces the spent tailnet-policy PR 25 entry, which merged."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "246eedd97e5d06490f945979c0a365f952e6a6b0786999d04886b4080f0cf87b",
+        "protected_diff_sha256": "dabe5227e359bcdc9793c86f9f8dc3bba32e35c080f58d2afcd871d2ec035a43",
         "paths": [
-          "scripts/agent_relay/standing_seat/seat.py",
-          "scripts/agent_relay/standing_seat_governor.py"
+          "scripts/launch_managed_session.py"
         ],
-        "issued_at": "2026-10-28T10:45:11Z",
-        "not_after": "2026-11-04T10:45:11Z",
+        "issued_at": "2026-10-31T15:15:53Z",
+        "not_after": "2026-11-07T15:15:53Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 11239's exact protected change, a standing-seat Governor generation that can run on the Codex subscription (it replaced PR 9804)."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff 6543996745): agent-toolkit PR 14263's exact protected change: snapshot Git configuration and origin/main ancestry, then validate, fetch and fast-forward before strict live-main binding, unblocking the Kali successor (#4818). It replaces the spent agent-toolkit PR 11239 entry, which merged."
       },
       {
         "schema": "aeos-accepted-change/v1",
@@ -371,14 +369,15 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "78e8664e9b6e6eff6a01cf7d0beb6b1e25871a3975230a557b7cc2141558edbf",
+        "protected_diff_sha256": "0094430dfd01ea179afb10c48cb62ebbac252cd4f6152ba63772e22af2bcf71b",
         "paths": [
-          "scripts/agent_relay/standing_seat_governor.py"
+          "scripts/agent_relay/receipt_execution.py",
+          "scripts/agent_relay/settlement_envelope.py"
         ],
-        "issued_at": "2026-10-31T09:11:28Z",
-        "not_after": "2026-11-07T09:11:28Z",
+        "issued_at": "2026-10-31T15:31:28Z",
+        "not_after": "2026-11-07T15:31:28Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6540576232): agent-toolkit PR 13747's exact protected change: a standing Governor's passive turn end consults its own programme's frontier on the node and is refused once while shown ready work is undisposed (#11570). It also drops the spent entry for PR 13722, which merged."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff 6492854048): agent-toolkit PR 14305's exact protected SAST repair, keeping writer-check completeness and settlement claim-field refusal active under Python optimization (#12108; programme #3460). It replaces the spent PR 13747 entry, which merged."
       }
     ]
   }
