@@ -369,14 +369,15 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "78e8664e9b6e6eff6a01cf7d0beb6b1e25871a3975230a557b7cc2141558edbf",
+        "protected_diff_sha256": "0094430dfd01ea179afb10c48cb62ebbac252cd4f6152ba63772e22af2bcf71b",
         "paths": [
-          "scripts/agent_relay/standing_seat_governor.py"
+          "scripts/agent_relay/receipt_execution.py",
+          "scripts/agent_relay/settlement_envelope.py"
         ],
-        "issued_at": "2026-10-31T09:11:28Z",
-        "not_after": "2026-11-07T09:11:28Z",
+        "issued_at": "2026-10-31T15:31:28Z",
+        "not_after": "2026-11-07T15:31:28Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6540576232): agent-toolkit PR 13747's exact protected change: a standing Governor's passive turn end consults its own programme's frontier on the node and is refused once while shown ready work is undisposed (#11570). It also drops the spent entry for PR 13722, which merged."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff 6492854048): agent-toolkit PR 14305's exact protected SAST repair, keeping writer-check completeness and settlement claim-field refusal active under Python optimization (#12108; programme #3460). It replaces the spent PR 13747 entry, which merged."
       }
     ]
   }
