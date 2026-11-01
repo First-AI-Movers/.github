@@ -254,14 +254,14 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "1b6b3cd46b69284d5feed815fb534d74e927afa5a7e7e9748fe214445b09765c",
+        "protected_diff_sha256": "cbcdca993860ecee4da478390c352b68bb48a7895336f5eb23bdd94078698112",
         "paths": [
-          "scripts/launch_managed_session.py"
+          "scripts/agent_relay/work_placement.py"
         ],
-        "issued_at": "2026-11-01T10:27:09Z",
-        "not_after": "2026-11-08T10:27:09Z",
+        "issued_at": "2026-11-01T13:58:40Z",
+        "not_after": "2026-11-08T13:58:40Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6556645234): the exact launcher fetch-auth repair for mission #4818 under programme #2449. The launcher uses its existing machine identity for canonical-origin fetch without an ambient credential fallback. It replaces the spent agent-toolkit PR 14263 launcher entry, which merged."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6558468099): agent-toolkit PR 15425's exact #5497 placement repair counts live Launchpad sessions and carries CPU load through existing receipts and placement. It replaces the spent launcher entry carried by agent-toolkit PR 15267, which merged."
       },
       {
         "schema": "aeos-accepted-change/v1",
