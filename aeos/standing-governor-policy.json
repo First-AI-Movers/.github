@@ -181,203 +181,124 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "ac2a4a0a83ae4f900794d6e98a77ccb8814e29c5d60640000077d99e9ca4acb7",
-        "paths": [
-          "scripts/agent_relay/auto_candidates.py"
-        ],
-        "issued_at": "2026-10-30T12:52:48Z",
-        "not_after": "2026-11-06T12:52:48Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change handoff comment 6523100383): agent-toolkit PR 13290's exact protected change: listener reconstruction evidence survives fires under an exact version-bound key, so an unchanged Issue costs no GraphQL and the machine installation stops running dry every hour."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "0ef389ac9b1e2090b9fb3f247d6c2658cb1937799fa4b90310d67f00cd517e1e",
-        "paths": [
-          "scripts/flight_deck/control_admission.py"
-        ],
-        "issued_at": "2026-10-28T20:20:47Z",
-        "not_after": "2026-11-04T20:20:47Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, COO comment 6479630194): agent-toolkit PR 11565's exact protected change, row B7-2-10: the control-admission cursor accepts only real ASCII UTC stamps and rescans instead of wedging on an unreadable one."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "3bc97747175d27f2ed904d14961215b2ac93204c1f07d2aea02f4bb8cd2ebb2c",
-        "paths": [
-          "scripts/flight_deck/control_ingest.py"
-        ],
-        "issued_at": "2026-10-28T20:20:47Z",
-        "not_after": "2026-11-04T20:20:47Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, COO comment 6479630194): agent-toolkit PR 11566's exact protected change, row B7-2-11: control ingest reads an instant only from ASCII digits."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "8152ad236f62779d29ab490f359f6046616b6bd4c91375daf38ee5ce36825217",
+        "protected_diff_sha256": "bd5045430078bb01739c5db67c191c973714ca04eebdee2615cd885848ed3506",
         "paths": [
           "scripts/flight_deck/control_sources.py"
         ],
-        "issued_at": "2026-10-28T20:20:47Z",
-        "not_after": "2026-11-04T20:20:47Z",
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, COO comment 6479630194): agent-toolkit PR 11568's exact protected change, row H10 (B5-1-08): a grant store holding a duplicate key is refused instead of reading as its last, widest scope."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 15702's exact protected change bounds live-head and local-grant JSON inputs in control admission sources (#15445)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "d54b1c452fd6ab921a87d92ad78c1b6ecdb86ad1fe1bf9576aed0489a1708dc1",
+        "protected_diff_sha256": "48ca19689fee8bf2f78471d1012f0a7653a7658b003a944fc891ca3886579e3c",
         "paths": [
-          "scripts/admission_shadow/core.py"
+          "scripts/agent_relay/standing_authority.py"
         ],
-        "issued_at": "2026-10-28T21:49:40Z",
-        "not_after": "2026-11-04T21:49:40Z",
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052): agent-toolkit PR 11637's exact protected change: the admission judge reader finds gh on the caller's PATH and refuses typed when it is absent, so an ask from a host that keeps gh outside the default path no longer fails."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 15783's exact protected change bounds standing-authority source JSON before parse (#15445)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "30b9b1676fca81cc412f0a4bdab8b0a864aba375b4d8295243e583be3305a0f6",
+        "protected_diff_sha256": "bb8756bec3665ad2f12918b131063cb648c856567a951b86c6add4926659d259",
         "paths": [
-          "scripts/agent_relay/grok_session_telemetry.py",
+          "scripts/agent_relay/remote_node_session.py",
           "scripts/agent_relay/standing_seat_governor.py"
         ],
-        "issued_at": "2026-10-31T15:15:53Z",
-        "not_after": "2026-11-07T15:15:53Z",
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff 6543252346): agent-toolkit PR 14022's exact protected change: Grok progress binds its running child's native session, and watchdog and standdown stops reap the whole descendant tree (#3732). It replaces the spent tailnet-policy PR 25 entry, which merged."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 16163's exact protected change makes remote-session and standing-seat record renames durable (#4456)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "cbcdca993860ecee4da478390c352b68bb48a7895336f5eb23bdd94078698112",
+        "protected_diff_sha256": "938937e84ec780477c7a86545b2c480f983819f4d264f4de26559f66bce028a1",
         "paths": [
-          "scripts/agent_relay/work_placement.py"
+          "scripts/flight_deck/node_resources.py",
+          "scripts/flight_deck/resource_details.py"
         ],
-        "issued_at": "2026-11-01T13:58:40Z",
-        "not_after": "2026-11-08T13:58:40Z",
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6558468099): agent-toolkit PR 15425's exact #5497 placement repair counts live Launchpad sessions and carries CPU load through existing receipts and placement. It replaces the spent launcher entry carried by agent-toolkit PR 15267, which merged."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17483's exact protected change carries absolute per-volume resource details into Flight Deck node detail."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "a7974548a294b064ad002642e4a613bcd28c581d170194ff01f8313c3624f2e8",
-        "paths": [
-          "scripts/agent_relay/integrate.py",
-          "scripts/agent_relay/receipt_compiler.py",
-          "scripts/agent_relay/receipt_execution.py",
-          "scripts/agent_relay/receipt_pack_policy.py",
-          "scripts/agent_relay/write_lane_execute.py"
-        ],
-        "issued_at": "2026-10-28T10:45:11Z",
-        "not_after": "2026-11-04T10:45:11Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 10077's exact protected change, the team factory commissioning independent review by consequence."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "4b5004b93aee34872355454994ce0a86730bb9be3ddb7b96dd0171efc3251c02",
-        "paths": [
-          "scripts/agent_relay/full_cycle_controller.py"
-        ],
-        "issued_at": "2026-10-28T10:45:11Z",
-        "not_after": "2026-11-04T10:45:11Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 11275's exact protected change, an ordinary merged PR that waits on neither the residual-sweep window nor a closeout authority (it replaced PR 7978)."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "6f84c0334dc43dab3671eef43a51f302ef2d3cb5e441e99a658775f6cde43dd9",
-        "paths": [
-          "scripts/agent_relay/dispatcher.py"
-        ],
-        "issued_at": "2026-10-28T10:45:11Z",
-        "not_after": "2026-11-04T10:45:11Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 11273's exact protected change, an aged unbound commission that stays selectable and is labelled stale (it replaced PR 7976)."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "1db4c2386afafd7bf1f097692f640e3b5626aac48f764feff73490d6d1c3320b",
-        "paths": [
-          "scripts/flight_deck/governed_sessions.py"
-        ],
-        "issued_at": "2026-10-28T10:45:11Z",
-        "not_after": "2026-11-04T10:45:11Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): agent-toolkit PR 11274's exact protected change, Noah folding one standing seat's resident and parked turn into one Governor (it replaced PR 8498)."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "0ed2b840a19c85bba40510f51e61486a704ff49ae44df4648dc5d5296a3f7223",
-        "paths": [
-          "scripts/agent_relay/standing_seat/seat.py",
-          "scripts/agent_relay/standing_seat_governor.py"
-        ],
-        "issued_at": "2026-10-28T10:45:11Z",
-        "not_after": "2026-11-04T10:45:11Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, operator comment 6465029658): the exact protected change of agent-toolkit PR 8788 rebuilt on PR 11239's protected bytes, three Conductor seat fixes, opened once PR 11239 lands."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "a6452cb8d54b061cf80e3d682af325310d1073d41eefd4322b014454ec4e7e3c",
+        "protected_diff_sha256": "347a97333e22a045f6f6525993ebc0f2320739feb97f9b4bb539a314d84e3f00",
         "paths": [
           "scripts/flight_deck/node_resources.py"
         ],
-        "issued_at": "2026-10-29T17:06:20Z",
-        "not_after": "2026-11-05T17:06:20Z",
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, COO comment 6500649627): agent-toolkit PR 12552's exact protected change, Noah row B7-7-1: a Cell carries its validated repository-changes reading in node detail; an absent or refused reading emits no key."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17498's exact protected change shows shared storage capacity and per-source backup completion in node detail."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "af1c1861a67309fc8eddb4fe1af4829dfa76093ffc7f3380f812bcc28cccd054",
+        "protected_diff_sha256": "62bc8667debdab31a694d36c9e047103142a87c0f7c822e4331437cf0f21ad25",
         "paths": [
-          "scripts/agent_relay/standing_seat/seat.py"
+          "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-10-30T07:47:26Z",
-        "not_after": "2026-11-06T07:47:26Z",
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6515064803): agent-toolkit PR 13028's exact protected change: a standing seat rolls back a failed log append and moves a torn log tail aside, so a full disk cannot leave it blind."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/tailnet-policy",
-        "protected_diff_sha256": "11cd031545a33289a0a7c0b9bf1148e22eb55a55889b2478916c2f1c9a02670d",
-        "paths": [
-          ".github/workflows/tailscale-policy.yml",
-          "AGENTS.md",
-          "README.md"
-        ],
-        "issued_at": "2026-10-30T08:47:00Z",
-        "not_after": "2026-11-06T08:47:00Z",
-        "activation": "enabled",
-        "decision": "The operator's Approve of this change (agent-toolkit #3052, ADR:tailnet-policy-machine-mergeable-change-class A1.2, mission #9615): tailnet-policy PR 27's exact change, credential-free offline PR validation of policy.hujson, its workflow, AGENTS.md and README.md, carried byte for byte by the machine."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17551's exact protected change settles routine session flags and types overloaded readers in Flight Deck governed sessions."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "0094430dfd01ea179afb10c48cb62ebbac252cd4f6152ba63772e22af2bcf71b",
+        "protected_diff_sha256": "741dbaa0aee595e8882beef885e3350a9298fd009c64b8bc286946642c228aa8",
         "paths": [
-          "scripts/agent_relay/receipt_execution.py",
-          "scripts/agent_relay/settlement_envelope.py"
+          "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-10-31T15:31:28Z",
-        "not_after": "2026-11-07T15:31:28Z",
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff 6492854048): agent-toolkit PR 14305's exact protected SAST repair, keeping writer-check completeness and settlement claim-field refusal active under Python optimization (#12108; programme #3460). It replaces the spent PR 13747 entry, which merged."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17681's exact protected change adds Dev03 to the governed-sessions node set so its Governors are visible (#2894)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "3c22db0f1cfc73119eb4d082967c6d7999b9f8ef1fe114aaadce0de2a5fac2b5",
+        "paths": [
+          "scripts/agent_relay/standing_seat_governor.py"
+        ],
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17683's exact protected change treats a spent Grok 402 balance as the harness's capacity, not a provider failure (#3732)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "33e5508e0a82b707ab5d9fddf7c095e33c679d7668be42c40334a558f1ad8156",
+        "paths": [
+          "scripts/flight_deck/governed_sessions.py"
+        ],
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17690's exact protected change names on a seat Governor row the model its harness served this generation (#6949)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "012c17165044dec480fc0abafd33a40f681808efa20acb312415c164b21fd26a",
+        "paths": [
+          "scripts/agent_relay/auto_candidates.py"
+        ],
+        "issued_at": "2026-11-04T23:30:27Z",
+        "not_after": "2026-11-11T23:30:27Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17691's exact protected change reads a changed Issue's placement log only from its comments changed since (#13814)."
       }
     ]
   }
