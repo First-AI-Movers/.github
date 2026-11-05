@@ -182,38 +182,26 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "ac2a83ac2705f8e1d657a71bb740536e8248ee32a12a7b0a9ae68b433452e80c",
+        "protected_diff_sha256": "df879905a556a57fad59ae553e1bdacd99c02d7ea354ed94477ec37cf1b542bc",
         "paths": [
           "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-11-05T15:50:19Z",
-        "not_after": "2026-11-12T15:50:19Z",
+        "issued_at": "2026-11-05T19:16:51Z",
+        "not_after": "2026-11-12T19:16:51Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 3): agent-toolkit PR 18044's exact protected change. Noah's existing peer lease reader carries the dispatcher PR writer binding (#2894)."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 4): agent-toolkit PR 18044's exact protected change at its moved merge base. Noah's existing peer lease reader carries the dispatcher PR writer binding (#2894)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "46e9201786546182d95951fa6b70957e0df2fc0e411679a48218f83618ccc4b0",
-        "paths": [
-          "scripts/agent_relay/auto_candidates.py"
-        ],
-        "issued_at": "2026-11-05T15:50:19Z",
-        "not_after": "2026-11-12T15:50:19Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 3): agent-toolkit PR 18067's exact protected change. Standing discovery parks an unchanged, already refused commission without repeated approval reconstruction (#17583)."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "057aef5eb038882812be90dbdd2e71b26617b96596b2dab0b31d86bb50645c4a",
+        "protected_diff_sha256": "b08c402d059f4aa8347025b690f94f0a62208d94bab876b953539ea96d7d972a",
         "paths": [
           "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-11-05T15:50:19Z",
-        "not_after": "2026-11-12T15:50:19Z",
+        "issued_at": "2026-11-05T19:16:51Z",
+        "not_after": "2026-11-12T19:16:51Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 3): agent-toolkit PR 18142's exact protected change. The combined carrier stacked on PR 18044 carries native unit-active and park-bound wake evidence through the existing governed-session readers (#17582, #17657, #18005)."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 4): agent-toolkit PR 18142's exact protected change at its moved merge base. The combined carrier stacked on PR 18044 carries native unit-active and park-bound wake evidence through the existing governed-session readers (#17582, #17657, #18005)."
       }
     ]
   }
