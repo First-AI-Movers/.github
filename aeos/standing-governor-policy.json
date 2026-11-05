@@ -181,124 +181,87 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "bd5045430078bb01739c5db67c191c973714ca04eebdee2615cd885848ed3506",
+        "protected_diff_sha256": "4ad602772b2c59c675ad93fb2aa03aceb2c84ca8838eb1a3715132ad6c460ba5",
         "paths": [
-          "scripts/flight_deck/control_sources.py"
+          "scripts/agent_relay/value_receipt.py"
         ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
+        "issued_at": "2026-11-05T08:47:55Z",
+        "not_after": "2026-11-12T08:47:55Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 15702's exact protected change bounds live-head and local-grant JSON inputs in control admission sources (#15445)."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, judge-policy-wait comment 6653088592): agent-toolkit PR 17702's exact protected change: an intent-v1 generation owes its agent-relay value-delivery receipt, so the producer on main since PR 7184 publishes one (#3645)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "48ca19689fee8bf2f78471d1012f0a7653a7658b003a944fc891ca3886579e3c",
+        "protected_diff_sha256": "a055a04ecd7457bd00dfc8df9f966118daf16d13d72d9b6c2e3370a72b3145c4",
         "paths": [
-          "scripts/agent_relay/standing_authority.py"
+          "scripts/flight_deck/node_resources.py"
         ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
+        "issued_at": "2026-11-05T08:47:55Z",
+        "not_after": "2026-11-12T08:47:55Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 15783's exact protected change bounds standing-authority source JSON before parse (#15445)."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 2): agent-toolkit PR 17812's exact protected change at its current-main head: Flight Deck's remote node detail reader bounds JSON size and depth before parse with the shared json_input bound (#15445)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "bb8756bec3665ad2f12918b131063cb648c856567a951b86c6add4926659d259",
+        "protected_diff_sha256": "7729980bc5ec84d09473912b7acea373e8b3fe54344bfac3aa285d51b3be20de",
+        "paths": [
+          "scripts/agent_relay/machine_identity.py"
+        ],
+        "issued_at": "2026-11-05T08:47:55Z",
+        "not_after": "2026-11-12T08:47:55Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, judge-policy-wait comment 6653088592): agent-toolkit PR 18004's exact protected change: machine gh calls disable telemetry and update notifications, so a detached child no longer recreates a cleaned temporary HOME (#18003, #2630)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "6bb72a0535b43461cb9079e3ffd392948d7d95da205614f7af4748803f49c519",
         "paths": [
           "scripts/agent_relay/remote_node_session.py",
           "scripts/agent_relay/standing_seat_governor.py"
         ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
+        "issued_at": "2026-11-05T08:47:55Z",
+        "not_after": "2026-11-12T08:47:55Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 16163's exact protected change makes remote-session and standing-seat record renames durable (#4456)."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 2): agent-toolkit PR 18012's exact protected change, the current-main rebuild of PR 16163: authoritative remote-session and standing-seat record renames fsync their parent directory before returning success (#4456)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "938937e84ec780477c7a86545b2c480f983819f4d264f4de26559f66bce028a1",
-        "paths": [
-          "scripts/flight_deck/node_resources.py",
-          "scripts/flight_deck/resource_details.py"
-        ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17483's exact protected change carries absolute per-volume resource details into Flight Deck node detail."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "347a97333e22a045f6f6525993ebc0f2320739feb97f9b4bb539a314d84e3f00",
+        "protected_diff_sha256": "139d2b2fd66b2e1bd8447b74f44615e84d7ca6ce264d04e29b1944bceb4fe8e7",
         "paths": [
           "scripts/flight_deck/node_resources.py"
         ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
+        "issued_at": "2026-11-05T08:47:55Z",
+        "not_after": "2026-11-12T08:47:55Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17498's exact protected change shows shared storage capacity and per-source backup completion in node detail."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 2): agent-toolkit PR 18023's exact protected change, the current-main rebuild of PR 17498: storage boxes show shared fleet capacity and the last successful backup per source (#17488)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "62bc8667debdab31a694d36c9e047103142a87c0f7c822e4331437cf0f21ad25",
+        "protected_diff_sha256": "38b9dd7d6570b97d8ac397dbdd41756ed8d728ff0d44ad455de2d24e2a2aea48",
         "paths": [
           "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
+        "issued_at": "2026-11-05T08:47:55Z",
+        "not_after": "2026-11-12T08:47:55Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17551's exact protected change settles routine session flags and types overloaded readers in Flight Deck governed sessions."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 2): agent-toolkit PR 18033's exact protected change, the current-main rebuild of PRs 17690 and 18017: a seat Governor row names the model its harness reported for the current generation (#6949)."
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "741dbaa0aee595e8882beef885e3350a9298fd009c64b8bc286946642c228aa8",
+        "protected_diff_sha256": "ac77c1bb555123de09443c4e738678b972ec1356b9a5b89cd19b3f25406d041e",
         "paths": [
           "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
+        "issued_at": "2026-11-05T08:47:55Z",
+        "not_after": "2026-11-12T08:47:55Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17681's exact protected change adds Dev03 to the governed-sessions node set so its Governors are visible (#2894)."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "3c22db0f1cfc73119eb4d082967c6d7999b9f8ef1fe114aaadce0de2a5fac2b5",
-        "paths": [
-          "scripts/agent_relay/standing_seat_governor.py"
-        ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17683's exact protected change treats a spent Grok 402 balance as the harness's capacity, not a provider failure (#3732)."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "33e5508e0a82b707ab5d9fddf7c095e33c679d7668be42c40334a558f1ad8156",
-        "paths": [
-          "scripts/flight_deck/governed_sessions.py"
-        ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17690's exact protected change names on a seat Governor row the model its harness served this generation (#6949)."
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "012c17165044dec480fc0abafd33a40f681808efa20acb312415c164b21fd26a",
-        "paths": [
-          "scripts/agent_relay/auto_candidates.py"
-        ],
-        "issued_at": "2026-11-04T23:30:27Z",
-        "not_after": "2026-11-11T23:30:27Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, handoff comment 6640000922): agent-toolkit PR 17691's exact protected change reads a changed Issue's placement log only from its comments changed since (#13814)."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 2): agent-toolkit PR 18036's exact protected change, the current-main rebuild of PRs 17551 and 18015: Flight Deck session observations separate settled historical failures from operator questions (#6949, #5144)."
       }
     ]
   }
