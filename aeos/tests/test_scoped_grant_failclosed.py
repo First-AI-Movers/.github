@@ -230,5 +230,117 @@ class ServedRootBounds(unittest.TestCase):
         self.assertFalse(self.admitted())
 
 
+class MachineChildFailClosed(unittest.TestCase):
+    """Malformed child/parent evidence can never escape as an exception or a partial admission time."""
+
+    def setUp(self):
+        from test_scoped_grant import CHILD_REF, PATH, MachineChildWorld, epoch, load_policy
+        self.policy = load_policy()
+        self.world = MachineChildWorld(self.policy)
+        self.ref, self.paths, self.created = CHILD_REF, [PATH], epoch(0)
+
+    def served(self):
+        return {"node": self.world.served, "authority_parent": self.world.parent,
+                "label": self.policy.scoped_grant["admission_label"]}
+
+    def admitted_at(self, served):
+        return sg._admitted_at(served, self.ref, self.policy, self.created, self.paths,
+                               dp.served_resident_admits)
+
+    def test_hostile_typed_evidence_never_raises_or_returns_a_partial_time(self):
+        from test_scoped_grant import HOSTILE, replaced
+        addresses = [
+            ("node", "author"), ("node", "editor"), ("node", "createdAt"),
+            ("node", "lastEditedAt"), ("node", "userContentEdits"), ("node", "labels"),
+            ("node", "timelineItems"), ("authority_parent", "author"),
+            ("authority_parent", "body"), ("authority_parent", "createdAt"),
+            ("authority_parent", "lastEditedAt"), ("authority_parent", "userContentEdits"),
+            ("authority_parent", "labels"), ("authority_parent", "timelineItems"),
+        ]
+        failures = []
+        for address in addresses:
+            for hostile in HOSTILE:
+                spoiled = replaced(self.served(), address, hostile)
+                try:
+                    got = self.admitted_at(spoiled)
+                except Exception as error:  # noqa: BLE001 - the property under test is total refusal
+                    failures.append((address, repr(hostile), repr(error)))
+                if got is not None:
+                    failures.append((address, repr(hostile), got))
+        self.assertEqual(failures, [])
+
+    def test_pure_child_readers_refuse_hostile_shapes_without_raising(self):
+        from test_scoped_grant import HOSTILE, MACHINE, REPO, machine_envelope
+        parent = sg._fence(self.world.parent["body"], "standing-authority")
+        for hostile in HOSTILE:
+            with self.subTest(value=repr(hostile)):
+                self.assertIsNone(sg._authority_parent(hostile, self.ref))
+                self.assertIsNone(sg._commission_envelope(hostile))
+                self.assertIsNone(sg._history(hostile, {MACHINE}))
+                self.assertFalse(sg._commission_scope(hostile, REPO, parent, self.paths))
+                self.assertFalse(sg._commission_scope(machine_envelope(), hostile, parent, self.paths))
+                self.assertFalse(sg._commission_scope(machine_envelope(), REPO, hostile, self.paths))
+
+    def test_parent_lookup_refuses_self_and_cross_repository_without_a_parent_read(self):
+        from test_scoped_grant import machine_child_body
+        for marker in (f"<!-- aeos-authority-parent: {self.ref} -->",
+                       "<!-- aeos-authority-parent: Other-Org/other#3052 -->"):
+            with self.subTest(marker=marker):
+                self.assertIsNone(sg._authority_parent(machine_child_body(markers=[marker]), self.ref))
+
+    def test_a_fully_consistent_same_named_user_is_still_not_the_machine(self):
+        impostor = {"login": "aeos-autonomous-main", "__typename": "User"}
+        self.world.served.update(author=dict(impostor), editor=dict(impostor))
+        self.world.served["userContentEdits"]["nodes"][0]["editor"] = dict(impostor)
+        self.world.served["timelineItems"]["nodes"][0]["actor"] = dict(impostor)
+        self.assertIsNone(self.admitted_at(self.served()))
+
+    def test_effective_admission_cannot_postdate_activation_even_without_an_observed_outlier(self):
+        from unittest import mock
+        original = sg._history
+
+        def late_parent(node, machine_logins):
+            result = original(node, machine_logins)
+            if node is self.world.parent and result is not None:
+                result["current"] = self.created + 1
+                result["times"] = [stamp for stamp in result["times"] if stamp <= self.created]
+            return result
+
+        with mock.patch.object(sg, "_history", side_effect=late_parent):
+            self.assertIsNone(self.admitted_at(self.served()))
+
+    def test_deeply_nested_authority_json_is_a_typed_refusal_not_a_recursion_fault(self):
+        self.world.parent["body"] = "```standing-authority\n" + "[" * 2000 + "]" * 2000 + "\n```\n"
+        self.assertIsNone(self.admitted_at(self.served()))
+
+    def test_every_contributing_timestamp_must_precede_activation(self):
+        from unittest import mock
+        original = sg._history
+
+        def future_observation(node, machine_logins):
+            result = original(node, machine_logins)
+            if result is not None:
+                result["times"].append(self.created + 1)
+            return result
+
+        with mock.patch.object(sg, "_history", side_effect=future_observation):
+            self.assertIsNone(self.admitted_at(self.served()))
+
+    def test_only_the_json_commission_projection_is_proved_identity(self):
+        from test_scoped_grant import PARENT_MARKER, REPO
+        body = self.world.served["body"]
+        self.assertIsNone(sg.current_generation(self.ref, body, "intent-v1"))
+        self.assertIsNotNone(sg.current_generation(self.ref, body, "intent-v1", json_commission=True))
+        plain_yaml = PARENT_MARKER + "\n```yaml\ncommission_version: 1\nrepository: " + REPO + "\n```\n"
+        self.assertIsNone(sg.current_generation(self.ref, plain_yaml, "intent-v1", json_commission=True))
+
+    def test_a_bot_has_no_admission_time_without_the_strict_inputs_or_interpreter(self):
+        self.assertIsNone(sg._admitted_at(self.served()))
+        self.assertIsNotNone(self.admitted_at(self.served()))
+        self.assertIsNone(sg._admitted_at(self.served(), self.ref, self.policy, self.created, self.paths, None))
+        self.world.parent["state"] = "CLOSED"
+        self.assertIsNone(self.admitted_at(self.served()))
+
+
 if __name__ == "__main__":
     unittest.main()

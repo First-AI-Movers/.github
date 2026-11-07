@@ -176,7 +176,7 @@ class World:
             return {"data": {"repository": {"issue": copy.deepcopy(node)}}}
         if path.endswith(f"/issues/comments/{self.comment['id']}"):
             return dict(self.comment)
-        claim = sg.claim_ref(GENERATION)
+        claim = sg.claim_ref(getattr(self, "generation", GENERATION))
         if path == f"repos/{REPO}/git/ref/{claim[len('refs/'):]}":
             return {"ref": claim, "object": {"sha": self.claim_sha, "type": self.claim_type}}
         if path == f"repos/{REPO}/commits/{self.claim_sha}":
@@ -1171,6 +1171,424 @@ class ServedResidentGrant(unittest.TestCase):
         body = self.world.served['body'].replace('"serial":', '"serial": 1, "serial":', 1)
         self.bind_served_body(body)
         self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+
+CHILD_ISSUE = 19001
+PARENT_ISSUE = 3052
+CHILD_REF = f"{REPO}#{CHILD_ISSUE}"
+PARENT_REF = f"{REPO}#{PARENT_ISSUE}"
+PARENT_MARKER = f"<!-- aeos-authority-parent: {PARENT_REF} -->"
+OTHER_PATH = "scripts/flight_deck/provider_capacity.py"
+PARENT_PROSE = "# Operator programme\n"
+
+
+def machine_parent_body(**changes):
+    with open(os.path.join(HERE, "tests/full-resident-ceiling-vectors.json"), encoding="utf-8") as handle:
+        block = json.load(handle)["base"]
+    block.update(
+        repository=REPO, issue=PARENT_ISSUE, state="ACTIVE", parent=None,
+        programme_id="machine-child-parent", serial=2, not_after=stamp(121),
+        path_envelope=[PATH], max_active_writers=1, max_active_child_prs=1,
+        authority={"repository_read": True, "repository_write": True,
+                   "create_isolated_worktree": True, "create_branch": True,
+                   "create_pull_request": True, "same_scope_self_heal": True,
+                   "reply_with_evidence": True, "merge": False},
+        scope={"allowed": ["repository_read", "repository_write", "reply_with_evidence"],
+               "forbidden": ["deployment", "infrastructure", "migrations", "secrets",
+                             "identity_or_billing", "merge", "public_release",
+                             "external_communication", "legal_commitment"]},
+        execution_mode="modify", source_body_sha256=hashlib.sha256(PARENT_PROSE.encode()).hexdigest(),
+        disjoint_with=[])
+    block.update(changes)
+    return PARENT_PROSE + "```standing-authority\n" + json.dumps(block, indent=2) + "\n```\n"
+
+
+def machine_envelope():
+    return {
+        "commission_version": 1, "commission_id": "backlog-steward-fixture",
+        "repository": REPO, "commission_type": "implementation", "execution_mode": "modify",
+        "orchestrator_profile": "technical-lead-orchestrator", "target_logical_node": "cell-fixture",
+        "authority": {"repository_read": True, "repository_write": True,
+                      "create_isolated_worktree": True, "create_branch": True,
+                      "create_pull_request": True, "same_scope_self_heal": True,
+                      "reply_with_evidence": True},
+        "scope": {"allowed": [PATH], "forbidden": [".github/**", "aeos/**"]},
+        "team": {"required_roles": ["technical-lead", "implementation", "qa"],
+                 "optional_roles": ["independent-review"], "max_active_agents": 4,
+                 "max_orchestration_depth": 1},
+        "completion": {"stop_at_merge_gate": True, "resolve_review_threads": False},
+        "business_outcome": "deliver one bounded repair", "acceptance_criteria": ["focused proof passes"],
+        "required_tests": ["focused proof passes"],
+        "value": {"recipient": "programme", "predicate": "focused proof passes", "rollback": "revert the PR"},
+        "run_budget_seconds": 1800, "reconcile": {"candidate_paths": [PATH]},
+    }
+
+
+def machine_child_body(envelope=None, markers=None):
+    markers = [PARENT_MARKER] if markers is None else markers
+    prefix = "\n\n".join(markers) + "\n\n" if markers else ""
+    rendered = json.dumps(machine_envelope() if envelope is None else envelope, indent=2, sort_keys=True)
+    return prefix + "# Commission\n\n```yaml\n" + rendered + "\n```\n"
+
+
+class MachineChildWorld(World):
+    """A native-parent-free machine child, its operator parent, and its own current HELD generation."""
+
+    def __init__(self, policy):
+        super().__init__(policy)
+        operator = {"login": self.operator, "__typename": "User"}
+        label = policy.scoped_grant["admission_label"]
+        self.parent = {
+            "number": PARENT_ISSUE, "repository": {"nameWithOwner": REPO}, "body": machine_parent_body(),
+            "state": "OPEN", "createdAt": stamp(-500), "lastEditedAt": stamp(-400),
+            "author": dict(operator), "editor": dict(operator), "parent": None,
+            "labels": {"nodes": [{"id": "LA_C", "name": "commission"},
+                                 {"id": "LA_O", "name": "operator-authorized"}],
+                       "pageInfo": {"hasNextPage": False}},
+            "userContentEdits": {"totalCount": 1, "pageInfo": {"hasNextPage": False}, "nodes": [
+                {"editedAt": stamp(-400), "deletedAt": None, "editor": dict(operator)}]},
+            "timelineItems": {"pageInfo": {"hasPreviousPage": False}, "nodes": [
+                {"actor": dict(operator), "label": {"id": "LA_C", "name": "commission"},
+                 "createdAt": stamp(-450)},
+                {"actor": dict(operator), "label": {"id": "LA_O", "name": "operator-authorized"},
+                 "createdAt": stamp(-300)}]},
+        }
+        self.served = {
+            "number": CHILD_ISSUE, "repository": {"nameWithOwner": REPO}, "body": machine_child_body(),
+            "state": "OPEN", "createdAt": stamp(-250), "lastEditedAt": stamp(-200),
+            "author": dict(GQL_MACHINE), "editor": dict(GQL_MACHINE), "parent": None,
+            "labels": {"nodes": [{"id": "LA_1", "name": label}], "pageInfo": {"hasNextPage": False}},
+            "userContentEdits": {"totalCount": 1, "pageInfo": {"hasNextPage": False}, "nodes": [
+                {"editedAt": stamp(-200), "deletedAt": None, "editor": dict(GQL_MACHINE)}]},
+            "timelineItems": {"pageInfo": {"hasPreviousPage": False}, "nodes": [
+                {"actor": dict(GQL_MACHINE), "label": {"id": "LA_1", "name": label},
+                 "createdAt": stamp(-100)}]},
+        }
+        self.bind(self.served["body"])
+
+    def bind(self, body, version="intent-v1"):
+        previous = getattr(self, "generation", GENERATION)
+        self.served["body"] = body
+        digest = ("intent-v1:sha256:" if version == "intent-v1" else "sha256:") + hashlib.sha256(
+            body.encode("utf-8", "surrogatepass")).hexdigest()
+        self.generation = f"{CHILD_REF}@{digest}"
+        self.record_body = render_record(
+            self.policy, receipt__serves=CHILD_REF, receipt__generation=self.generation,
+            receipt__claim_ref=sg.claim_ref(self.generation))
+        self.record["body"] = self.record_body
+        self.commit["commit"]["message"] = self.commit["commit"]["message"].replace(previous, self.generation)
+
+    def grant(self, paths):
+        self.record_body = render_record(
+            self.policy, block__path_envelope=list(paths), receipt__serves=CHILD_REF,
+            receipt__generation=self.generation, receipt__claim_ref=sg.claim_ref(self.generation))
+        self.record["body"] = self.record_body
+
+    def api(self, path, *args):
+        if path == "graphql":
+            query = next(a for a in args if a.startswith("query="))
+            if "IssueComment" not in query:
+                number = int(next(a[2:] for a in args if a.startswith("i=")))
+                if number == PARENT_ISSUE:
+                    if number in self.unreadable:
+                        return None
+                    return {"data": {"repository": {"issue": copy.deepcopy(self.parent)}}}
+        return super().api(path, *args)
+
+
+class MachineChildGrant(unittest.TestCase):
+    """The strict block-bound child route; every near-miss starts from the same admitted world."""
+
+    verdict = ScopedGrantJudge.verdict
+    after_first_reading = ScopedGrantJudge.after_first_reading
+    git_verdict = ScopedGrantJudge.git_verdict
+
+    def setUp(self):
+        self.policy = load_policy()
+        self.world = MachineChildWorld(self.policy)
+
+    def set_parent(self, **changes):
+        self.world.parent["body"] = machine_parent_body(**changes)
+
+    def set_envelope(self, envelope, version="intent-v1"):
+        self.world.bind(machine_child_body(envelope), version=version)
+
+    def test_a_valid_block_bound_machine_child_admits_with_current_intent_generation(self):
+        self.assertIsNone(self.verdict())
+        facts = self.world.evidence()["scoped_grant"]
+        self.assertEqual(facts["served"]["authority_parent"], self.world.parent)
+        self.assertIsNone(self.world.served["parent"])
+        self.assertIn('editor{login __typename}', sg.ISSUE_QUERY)
+
+    def test_v0_binds_the_same_exact_child_body(self):
+        self.world.bind(self.world.served["body"], version="v0")
+        self.assertIsNone(self.verdict())
+
+    def test_effective_admission_needs_the_whole_proof_and_operator_timing_stays_label_only(self):
+        self.world.parent["timelineItems"]["nodes"][1]["createdAt"] = stamp(-50)
+        self.world.parent["lastEditedAt"] = stamp(-40)
+        self.world.parent["userContentEdits"]["nodes"][0]["editedAt"] = stamp(-40)
+        served = {"node": self.world.served, "authority_parent": self.world.parent,
+                  "label": self.policy.scoped_grant["admission_label"]}
+        self.assertIsNone(sg._admitted_at(served))
+        self.assertEqual(sg._admitted_at(served, CHILD_REF, self.policy, epoch(0), [PATH],
+                                        dp.served_resident_admits), epoch(-40))
+        label = self.policy.scoped_grant["admission_label"]
+        operator_served = {"node": served_node(self.world.operator, label), "label": label}
+        self.assertEqual(sg._admitted_at(operator_served), epoch(-50))
+        self.assertIsNone(self.verdict())
+
+    def test_malformed_ambiguous_cross_repository_and_self_parent_markers_refuse(self):
+        variants = {
+            "absent": machine_child_body(markers=[]),
+            "duplicate": machine_child_body(markers=[PARENT_MARKER, PARENT_MARKER]),
+            "malformed": machine_child_body(markers=[PARENT_MARKER + " trailing"]),
+            "cross-repository": machine_child_body(
+                markers=["<!-- aeos-authority-parent: Other-Org/other#3052 -->"]),
+            "self": machine_child_body(markers=[f"<!-- aeos-authority-parent: {CHILD_REF} -->"]),
+            "wrong-case": machine_child_body(
+                markers=[f"<!-- AEOS-AUTHORITY-PARENT: {PARENT_REF} -->"]),
+            "extra-mention": machine_child_body() + "\naeos-authority-parent\n",
+        }
+        for name, body in variants.items():
+            with self.subTest(case=name):
+                self.world = MachineChildWorld(self.policy)
+                self.world.bind(body)
+                self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_wrong_closed_revoked_or_unreadable_parent_and_lineage_refuse(self):
+        other = {"login": "other-user", "__typename": "User"}
+        cases = {
+            "closed": lambda w: w.parent.update(state="CLOSED"),
+            "transferred": lambda w: w.parent["repository"].update(nameWithOwner="Other-Org/other"),
+            "wrong-number": lambda w: w.parent.update(number=PARENT_ISSUE + 1),
+            "bot-author": lambda w: w.parent.update(author=dict(GQL_MACHINE)),
+            "nonoperator-author": lambda w: w.parent.update(author=dict(other)),
+            "mixed-edit": lambda w: (
+                w.parent["userContentEdits"]["nodes"].insert(
+                    0, {"editedAt": stamp(-450), "deletedAt": None, "editor": dict(other)}),
+                w.parent["userContentEdits"].update(totalCount=2)),
+            "deleted-edit": lambda w: w.parent["userContentEdits"]["nodes"][0].update(
+                deletedAt=stamp(-350)),
+            "missing-commission": lambda w: w.parent["labels"]["nodes"].pop(0),
+            "missing-authorization": lambda w: w.parent["labels"]["nodes"].pop(1),
+            "wrong-authorizer": lambda w: w.parent["timelineItems"]["nodes"][1].update(
+                actor=dict(GQL_MACHINE)),
+            "authorization-tie": lambda w: w.parent["timelineItems"]["nodes"].append(
+                copy.deepcopy(w.parent["timelineItems"]["nodes"][1])),
+            "previous-label-page": lambda w: w.parent["timelineItems"]["pageInfo"].update(hasPreviousPage=True),
+            "unreadable": lambda w: w.unreadable.add(PARENT_ISSUE),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                self.world = MachineChildWorld(self.policy)
+                mutate(self.world)
+                self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_non_full_stale_revoked_and_external_parent_authority_refuse(self):
+        short = dict(schema=sg.BLOCK_SCHEMA, state="ACTIVE", repository=REPO, issue=PARENT_ISSUE,
+                     not_after=stamp(121), path_envelope=[PATH])
+        cases = {
+            "revoked": machine_parent_body(state="PAUSED"),
+            "stale-prose": machine_parent_body(source_body_sha256="0" * 64),
+            "v1": machine_parent_body(schema="standing-authority/v1"),
+            "short-six-field": PARENT_PROSE + "```standing-authority\n" + json.dumps(short) + "\n```\n",
+            "external-without-activation-evidence": "# External ceiling only\n",
+            "zero-writers": machine_parent_body(max_active_writers=0),
+            "zero-child-prs": machine_parent_body(max_active_child_prs=0),
+            "invalid-serial": machine_parent_body(serial=0),
+        }
+        for name, body in cases.items():
+            with self.subTest(case=name):
+                self.world = MachineChildWorld(self.policy)
+                self.world.parent["body"] = body
+                self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_non_machine_mixed_or_ghost_child_origin_and_edits_refuse(self):
+        impostor = {"login": "aeos-autonomous-main", "__typename": "User"}
+        other = {"login": "other-user", "__typename": "User"}
+        cases = {
+            "closed": lambda w: w.served.update(state="CLOSED"),
+            "transferred": lambda w: w.served["repository"].update(nameWithOwner="Other-Org/other"),
+            "wrong-number": lambda w: w.served.update(number=CHILD_ISSUE + 1),
+            "same-named-user": lambda w: (
+                w.served.update(author=dict(impostor), editor=dict(impostor)),
+                w.served["userContentEdits"]["nodes"][0].update(editor=dict(impostor)),
+                w.served["timelineItems"]["nodes"][0].update(actor=dict(impostor))),
+            "other-bot": lambda w: w.served.update(author={"login": "dependabot", "__typename": "Bot"}),
+            "origin-mismatch": lambda w: w.served.update(editor=dict(other)),
+            "mixed-edit": lambda w: (
+                w.served["userContentEdits"]["nodes"].insert(
+                    0, {"editedAt": stamp(-300), "deletedAt": None, "editor": dict(other)}),
+                w.served["userContentEdits"].update(totalCount=2)),
+            "ghost-edit": lambda w: w.served["userContentEdits"]["nodes"][0].update(editor=None),
+            "deleted-edit": lambda w: w.served["userContentEdits"]["nodes"][0].update(
+                deletedAt=stamp(-150)),
+            "next-edit-page": lambda w: w.served["userContentEdits"]["pageInfo"].update(hasNextPage=True),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                self.world = MachineChildWorld(self.policy)
+                mutate(self.world)
+                self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_missing_stale_wrong_actor_duplicate_and_paginated_child_labels_refuse(self):
+        operator = {"login": self.world.operator, "__typename": "User"}
+        cases = {
+            "removed": lambda w: w.served["labels"].update(nodes=[]),
+            "wrong-event-id": lambda w: w.served["timelineItems"]["nodes"][0]["label"].update(id="LA_OTHER"),
+            "wrong-actor": lambda w: w.served["timelineItems"]["nodes"][0].update(actor=dict(operator)),
+            "tie": lambda w: w.served["timelineItems"]["nodes"].append(
+                copy.deepcopy(w.served["timelineItems"]["nodes"][0])),
+            "stale": lambda w: w.served["timelineItems"]["nodes"][0].update(createdAt=stamp(-250)),
+            "previous-page": lambda w: w.served["timelineItems"]["pageInfo"].update(hasPreviousPage=True),
+            "next-label-page": lambda w: w.served["labels"]["pageInfo"].update(hasNextPage=True),
+            "duplicate-current-label": lambda w: w.served["labels"]["nodes"].append(
+                {"id": "LA_2", "name": self.policy.scoped_grant["admission_label"]}),
+            "count-mismatch": lambda w: w.served["userContentEdits"].update(totalCount=2),
+            "last-edit-mismatch": lambda w: (
+                w.served.update(lastEditedAt=stamp(-100)),
+                w.served["timelineItems"]["nodes"][0].update(createdAt=stamp(-50))),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                self.world = MachineChildWorld(self.policy)
+                mutate(self.world)
+                self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_activation_before_any_required_authority_fact_refuses(self):
+        cases = {
+            "child-label": lambda w: w.served["timelineItems"]["nodes"][0].update(createdAt=stamp(1)),
+            "parent-authorization": lambda w: w.parent["timelineItems"]["nodes"][1].update(createdAt=stamp(2)),
+            "parent-current-body": lambda w: (w.parent.update(lastEditedAt=stamp(3)),
+                                              w.parent["userContentEdits"]["nodes"][0].update(editedAt=stamp(3))),
+            "child-created": lambda w: w.served.update(createdAt="not-a-time"),
+            "child-edit": lambda w: w.served["userContentEdits"]["nodes"][0].update(editedAt="not-a-time"),
+            "parent-created": lambda w: w.parent.update(createdAt="not-a-time"),
+            "parent-edit": lambda w: w.parent["userContentEdits"]["nodes"][0].update(editedAt="not-a-time"),
+            "label-time": lambda w: w.served["timelineItems"]["nodes"][0].update(createdAt="not-a-time"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                self.world = MachineChildWorld(self.policy)
+                mutate(self.world)
+                self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_unsupported_envelopes_and_other_authority_forms_refuse(self):
+        plain_yaml = (PARENT_MARKER + "\n\n```yaml\ncommission_version: 1\nrepository: " + REPO
+                      + "\nexecution_mode: modify\n```\n")
+        duplicate_key = machine_child_body().replace('"commission_version": 1',
+                                                     '"commission_version": 1, "commission_version": 1', 1)
+        cases = {
+            "plain-yaml": plain_yaml,
+            "missing": PARENT_MARKER + "\n\n# No envelope\n",
+            "two": machine_child_body() + "```yaml\n" + json.dumps(machine_envelope()) + "\n```\n",
+            "duplicate-key": duplicate_key,
+            "v2": machine_child_body(machine_envelope() | {"commission_version": 2}),
+            "operand": machine_child_body() + "<!-- aeos-authority-operand: 123 -->\n",
+            "successor": machine_child_body() + "<!-- aeos-authority-successor: refs/aeos-claims/3052/aaaaaaaaaaaa -->\n",
+            "child-ceiling": machine_child_body() + "```standing-authority\n{}\n```\n",
+        }
+        for name, body in cases.items():
+            with self.subTest(case=name):
+                self.world = MachineChildWorld(self.policy)
+                self.world.bind(body)
+                self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_empty_widened_and_excluded_child_paths_and_effects_refuse(self):
+        cases = {}
+        for name, envelope in (
+            ("empty-candidates", machine_envelope() | {"reconcile": {"candidate_paths": []}}),
+            ("empty-allowed", machine_envelope() | {"scope": {"allowed": [], "forbidden": []}}),
+            ("empty-effects", machine_envelope() | {"authority": {}}),
+            ("wrong-repository", machine_envelope() | {"repository": "Other-Org/other"}),
+            ("bad-mode", machine_envelope() | {"execution_mode": "deploy"}),
+            ("traversal", machine_envelope() | {"reconcile": {"candidate_paths": ["scripts/../aeos/x.py"]}}),
+            ("forbidden-shape", machine_envelope() | {"scope": {"allowed": [PATH], "forbidden": "not-a-list"}}),
+            ("nonbool-effect", machine_envelope() | {"authority": {"repository_write": 1}}),
+        ):
+            cases[name] = envelope
+        widened = machine_envelope()
+        widened["authority"]["deployment"] = True
+        cases["widened-effect"] = widened
+        no_write = machine_envelope()
+        del no_write["authority"]["repository_write"]
+        cases["no-write-effect"] = no_write
+        excluded = machine_envelope()
+        excluded["reconcile"]["candidate_paths"] = [PATH, ".github/workflows/x.yml"]
+        excluded["scope"]["allowed"] = [PATH, ".github/workflows/x.yml"]
+        cases["excluded-child-path"] = excluded
+        glob = machine_envelope()
+        glob["scope"]["allowed"] = ["scripts/flight_deck/**"]
+        cases["glob-prefix"] = glob
+        for name, envelope in cases.items():
+            with self.subTest(case=name):
+                self.world = MachineChildWorld(self.policy)
+                if name == "excluded-child-path":
+                    self.set_parent(path_envelope=[PATH, ".github/workflows/x.yml"])
+                elif name in {"glob-prefix", "traversal"}:
+                    self.set_parent(path_envelope=["scripts/flight_deck/"] if name == "glob-prefix" else ["scripts/"])
+                self.set_envelope(envelope)
+                self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_grant_paths_must_be_inside_both_child_and_parent_envelopes(self):
+        self.set_parent(path_envelope=[PATH, OTHER_PATH])
+        self.world.grant([PATH, OTHER_PATH])
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+        self.world = MachineChildWorld(self.policy)
+        widened = machine_envelope()
+        widened["reconcile"]["candidate_paths"] = [OTHER_PATH]
+        widened["scope"]["allowed"] = [OTHER_PATH]
+        self.set_envelope(widened)
+        self.world.grant([OTHER_PATH])
+        self.assertEqual(self.verdict([entry(OTHER_PATH)]), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+        self.world = MachineChildWorld(self.policy)
+        self.set_parent(path_envelope=[PATH, OTHER_PATH])
+        widened = machine_envelope()
+        widened["reconcile"]["candidate_paths"] = [OTHER_PATH, "scripts/flight_deck/needs_you.py"]
+        widened["scope"]["allowed"] = [OTHER_PATH]
+        self.set_envelope(widened)
+        self.world.grant([OTHER_PATH])
+        self.assertEqual(self.verdict([entry(OTHER_PATH)]), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+        self.world = MachineChildWorld(self.policy)
+        self.assertEqual(self.verdict([entry(), entry(OTHER_PATH)]), sg.PATH_OUTSIDE_ENVELOPE)
+
+    def test_stale_generation_released_wrong_execution_claim_and_expired_grant_refuse(self):
+        self.world.served["body"] += "\nChanged after the claim\n"
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_GENERATION_UNBOUND)
+        self.world = MachineChildWorld(self.policy)
+        self.world.commit["commit"]["message"] += "state=RELEASED\n"
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_OWNER_UNPROVEN)
+        self.world = MachineChildWorld(self.policy)
+        self.world.commit["commit"]["message"] = self.world.commit["commit"]["message"].replace(
+            "node=node-a", "node=node-b")
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_OWNER_UNPROVEN)
+        self.world = MachineChildWorld(self.policy)
+        self.assertEqual(self.verdict(now=epoch(6 * 24 * 60)), sg.SCOPED_GRANT_EXPIRED)
+
+    def test_parent_or_child_movement_between_reads_is_source_moved(self):
+        self.after_first_reading(lambda w: w.parent.update(state="CLOSED"))
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_SOURCE_MOVED)
+        self.world = MachineChildWorld(self.policy)
+        self.after_first_reading(lambda w: w.served.update(body=machine_child_body(markers=[])))
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_SOURCE_MOVED)
+
+    def test_a_pull_request_context_that_moves_after_collection_is_not_the_collected_grant(self):
+        evidence = self.world.evidence()
+        evidence["pull_request"]["body"] = self.world.pr_body(record_body=self.world.record_body + " ")
+        self.assertEqual(dp.machine_route(self.policy, evidence, None, REPO, [entry()], epoch(120)),
+                         sg.SCOPED_GRANT_UNAVAILABLE)
+
+    def test_revocation_after_the_second_read_is_the_documented_observation_boundary(self):
+        evidence = self.world.evidence()
+        self.world.parent["state"] = "CLOSED"
+        self.assertIsNone(dp.machine_route(self.policy, evidence, None, REPO, [entry()], epoch(120)))
+        self.assertIn("not atomic", sg.__doc__)
+        self.assertEqual(self.verdict(), sg.SCOPED_GRANT_ADMISSION_UNPROVEN)
+
+    def test_changed_protected_bytes_remain_non_regular_file_failures(self):
+        self.assertEqual(self.git_verdict(lambda repo: repo.symlink(PATH, "payload")),
+                         sg.SCOPED_GRANT_NOT_REGULAR_FILE)
 
 
 if __name__ == "__main__":
