@@ -182,14 +182,26 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "5da1ffc6e3d8ac3311a730b7b6e664576ee639eb8d51efe00c41ac48eaeb35ab",
+        "protected_diff_sha256": "8c6e27eb415cc8c0220e5c0534d78ce0c0c54d919c80836f76a1a373e2a28697",
         "paths": [
           "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-11-07T07:15:29Z",
-        "not_after": "2026-11-14T07:15:29Z",
+        "issued_at": "2026-11-07T15:41:55Z",
+        "not_after": "2026-11-14T15:41:55Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 8): agent-toolkit PR 19008's exact protected change at its current merge base. The Route O parser admits closure of the kit's own bound Issue as wake evidence, retaining existing refusals (#17657, Programme #2894)."
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 9): agent-toolkit PR 19057's exact protected change at its current merge base. Governed-session SSH sources select a distinct custodied identity for each node, with complete map validation and the legacy single-identity mode retained (#18993, Programme #2894)."
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "a2e88bc31317847df5797245ca4540b3b6507f53e55f51d5d5cfcf54922e9748",
+        "paths": [
+          "scripts/agent_relay/work_placement.py"
+        ],
+        "issued_at": "2026-11-07T15:41:55Z",
+        "not_after": "2026-11-14T15:41:55Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 9): agent-toolkit PR 19141's exact protected change at its current merge base. Cell placement retains pending occupancy above the active-run coverage of a newer resource reading, preventing premature release and double charging (#5497)."
       }
     ]
   }
