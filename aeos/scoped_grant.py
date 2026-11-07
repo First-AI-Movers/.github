@@ -31,6 +31,24 @@ Every premise is a fact GitHub already holds, collected by the trusted workflow
   a full resident uses the trusted resident interpreter, its existing write authority and its own
   envelope. Only the full resident class has no calendar end; activation records keep their TTL.
   An operator-authored note that was never admitted is NOT admitted.
+
+  A separate, strict route admits a machine-authored programme child. Its typed author, every edit,
+  current-body origin and newest activation-label actor must be the SAME pinned Bot. Exactly one
+  same-repository, non-self ``aeos-authority-parent`` marker selects an open operator programme;
+  the marker is only a lookup pointer. The parent is collected in both complete readings and needs
+  complete operator-only history, ``commission`` and ``operator-authorized`` labels, and an ACTIVE,
+  self-named FULL resident v2 block admitted by that same trusted interpreter. Child paths and true
+  effects must fit its envelope and grants, and grant paths must also fit the child's declarations.
+  Only the block-bound form is supported: operand and verify-successor markers, v1/short/external
+  ceilings, and non-JSON commission envelopes refuse. The child's exact body binds both v0 and the
+  placement-identity ``intent-v1`` generation of the current JSON-envelope producer.
+
+  Effective child admission is the latest of its valid label, the parent's valid authorization and
+  the parent body's creation/last edit. Every contributing observation must precede the record's
+  creation, so later authority cannot retroactively validate an early activation. Collection and
+  publication are not atomic with a later merge: a parent/child revocation after the second trusted
+  read cannot retract an already-computed verdict, and the residual remedy is revert. A fresh read
+  always re-verifies revocation; a change between the two reads is ``SOURCE_MOVED``.
 * **Ownership.** The receipt's ``activated_by`` is the node named by the live #5731 generation claim
   of the served generation, whose ref still points at the receipt's ``claim_commit``. That commit is
   authored by the machine principal, signed by GitHub, names exactly that node and generation, holds
@@ -83,6 +101,13 @@ _BLOCK = re.compile(r"^```standing-authority[ \t]*\n(.*?)\n```[ \t]*(?:\n|$)", r
 _CLAIM_PREFIX = "refs/aeos-claims/"
 _YAML_FENCE = re.compile(r"```ya?ml[ \t]*\r?\n(.*?)```", re.DOTALL | re.IGNORECASE)
 """agent-toolkit ``agent_relay.commission._YAML_BLOCK``: the only place its intent projection can move bytes."""
+_PARENT_MARKER = re.compile(
+    r"^[ \t]*<!--[ \t]*aeos-authority-parent:[ \t]*([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([1-9][0-9]{0,9})"
+    r"[ \t]*-->[ \t]*$", re.MULTILINE)
+_ANY_PARENT_MARKER = re.compile(r"aeos-authority-parent", re.IGNORECASE)
+_ANY_OPERAND_MARKER = re.compile(r"aeos-authority-operand", re.IGNORECASE)
+_ANY_SUCCESSOR_MARKER = re.compile(r"aeos-authority-successor", re.IGNORECASE)
+_ANY_AUTHORITY_FENCE = re.compile(r"(?:`{3,}|~{3,})[ \t]*standing-authority", re.IGNORECASE)
 
 EXCLUDED_PREFIXES = (".github/", "aeos/")
 """Lower-case path prefixes no grant may name: the merge control plane and this judge's own home."""
@@ -148,17 +173,17 @@ def claim_ref(generation: str) -> str:
     return f"{_CLAIM_PREFIX}{match[2]}/{hexed[:12]}"
 
 
-def current_generation(serves: str, body: str, version: str):
+def current_generation(serves: str, body: str, version: str, *, json_commission=False):
     """The served Issue's CURRENT generation key under ``version``, exactly as agent-toolkit's dispatcher mints
     it: ``auto_execute_queue.generation_key(repo, issue, digest_for_version(body, version))``, i.e.
     ``<repo>#<issue>@sha256:<hex>`` (``v0``, the exact body) or ``@intent-v1:sha256:<hex>`` (the body's
     intent projection), hashed over UTF-8 with ``surrogatepass``.
 
-    That projection removes placement lines only inside a fenced YAML block carrying ``commission_version``
-    and is the identity on every other body. An admitted canonized root is plain prose, so this judge
-    accepts an ``intent-v1`` generation only where the projection is provably the identity (no fenced YAML
-    block at all) and returns ``None`` otherwise: it never re-implements the projection. ``None`` too for an
-    unknown version or a malformed ``serves``."""
+    That projection removes placement lines only inside a fenced YAML block carrying an UNQUOTED, top-level
+    ``commission_version`` key. It is therefore the identity on the current Steward's JSON-in-YAML envelope,
+    whose key is quoted and whose placement lines the projection cannot sever. ``json_commission`` is off for
+    the incumbent operator route and on only for the separately verified machine-child route. Other YAML stays
+    unreadable here rather than re-implementing the projection. ``None`` for an unknown version or bad ref."""
     if not isinstance(serves, str) or not REF.fullmatch(serves) or not isinstance(body, str):
         return None
     raw = body.encode("utf-8", "surrogatepass")
@@ -166,7 +191,8 @@ def current_generation(serves: str, body: str, version: str):
         digest = "sha256:" + hashlib.sha256(raw).hexdigest()
     elif version == "intent-v1":
         if _YAML_FENCE.search(body) is not None:
-            return None
+            if not json_commission or _commission_envelope(body) is None:
+                return None
         digest = "intent-v1:sha256:" + hashlib.sha256(raw).hexdigest()
     else:
         return None
@@ -292,7 +318,7 @@ def validate_binding(binding, *, compiler) -> None:
 # -- the trusted workflow's collector ----------------------------------------------------------------
 ISSUE_QUERY = '''query($o:String!,$n:String!,$i:Int!){repository(owner:$o,name:$n){issue(number:$i){
 number repository{nameWithOwner} body state createdAt lastEditedAt
-author{login __typename} editor{login} parent{number state author{login __typename}}
+author{login __typename} editor{login __typename} parent{number state author{login __typename}}
 labels(first:100){nodes{id name} pageInfo{hasNextPage}}
 userContentEdits(first:100){totalCount pageInfo{hasNextPage} nodes{editedAt deletedAt editor{login __typename}}}
 timelineItems(last:50,itemTypes:[LABELED_EVENT]){pageInfo{hasPreviousPage}
@@ -315,6 +341,24 @@ def _graphql_issue(api, repository: str, number: int):
     return node
 
 
+def _authority_parent(body, served_ref):
+    """The marker-selected parent ref, or ``None`` unless its strict grammar and identity are unambiguous.
+
+    This is only a collector lookup and a second-pass join key. It carries no authority of its own.
+    """
+    served = REF.fullmatch(served_ref) if isinstance(served_ref, str) else None
+    if served is None or not isinstance(body, str):
+        return None
+    found = _PARENT_MARKER.findall(body)
+    mentions = len(_ANY_PARENT_MARKER.findall(body))
+    if len(found) != 1 or mentions != 1:
+        return None
+    repository, number = found[0]
+    if repository.lower() != served[1].lower() or int(number) == int(served[2]):
+        return None
+    return f"{served[1]}#{int(number)}"
+
+
 def _read(binding, api, repository: str, number: int):
     """One complete reading of every source the verdict rests on, exactly as the judge will receive it."""
     record = _graphql_issue(api, repository, number)
@@ -333,8 +377,13 @@ def _read(binding, api, repository: str, number: int):
         match = REF.fullmatch(receipt.get("serves") or "") if isinstance(receipt.get("serves"), str) else None
         if match is not None and match[1].lower() == repository.lower():
             try:
-                served = {"label": binding["admission_label"],
-                          "node": _graphql_issue(api, match[1], int(match[2]))}
+                node = _graphql_issue(api, match[1], int(match[2]))
+                parent = None
+                if (node.get("author") or {}).get("__typename") == "Bot":
+                    parent_ref = _authority_parent(node.get("body"), match[0])
+                    if parent_ref is not None:
+                        parent = _graphql_issue(api, parent_ref.split("#", 1)[0], int(parent_ref.split("#", 1)[1]))
+                served = {"label": binding["admission_label"], "node": node, "authority_parent": parent}
             except (KeyError, TypeError, ValueError):
                 served = None
         try:
@@ -360,12 +409,13 @@ def collect(binding, pr_body, api, observed_at):
     the candidate. ``api(path, *args)`` is the workflow's read-only ``gh api`` caller.
 
     A pull request with no marker yields ``{"marker": None}``. A record or directive that cannot be read is
-    ``{"unavailable": ...}``: unreadable, never "none". An unreadable served Issue or claim is recorded as
-    ``None`` and refuses at the judge.
+    ``{"unavailable": ...}``: unreadable, never "none". An unreadable served Issue, marker-selected parent
+    or claim is recorded as ``None`` and refuses at the judge.
 
     Every source is read twice, the second reading starting after the first has ended, and the two COMPLETE
     readings must be equal: every field the collector reads, edit histories included, for the record, the
-    directive, the served Issue, the claim ref and its commit. Any difference is ``SOURCE_MOVED``, so a
+    directive, the served Issue, any marker-selected parent, the claim ref and its commit. Any difference is
+    ``SOURCE_MOVED``, so a
     source edited (even edited and restored within one timestamp second), an admission revoked, or a claim
     superseded while the facts were being collected can never stand behind a pull request."""
     try:
@@ -477,9 +527,14 @@ def _admitted(served, ref, policy, now, *, paths=(), resident_admits=None) -> bo
         return False
 
 
-def _admitted_at(served):
-    """The served Issue's latest admission-label time, for the activation-order check."""
+def _admitted_at(served, ref=None, policy=None, record_created=None, paths=(), resident_admits=None):
+    """Effective admission, or ``None`` before a complete proof; the User route stays label-only."""
     try:
+        strict = ref is not None or policy is not None or record_created is not None
+        if strict or (served["node"].get("author") or {}).get("__typename") == "Bot":
+            if ref is None or policy is None or record_created is None:
+                return None
+            return _machine_admitted_at(served, ref, policy, record_created, paths, resident_admits)
         label = served["label"]
         present = [n for n in served["node"]["labels"]["nodes"] if isinstance(n, dict) and n.get("name") == label]
         label_id = present[0].get("id")
@@ -487,6 +542,243 @@ def _admitted_at(served):
                   if isinstance(n, dict) and isinstance(n.get("label"), dict) and n["label"].get("id") == label_id]
         return _iso(max(stamps))
     except (KeyError, TypeError, AttributeError, IndexError, ValueError):
+        return None
+
+
+# -- admission (the strict block-bound machine-child rules) --------------------------------------------
+def _actor_key(actor, machine_logins):
+    """A typed principal, with GraphQL's bare Bot login canonicalized; never a login-only impersonation."""
+    if not isinstance(actor, dict) or not isinstance(actor.get("login"), str):
+        return None
+    login, kind = actor["login"], actor.get("__typename")
+    if kind == "User":
+        return "User", login
+    if kind != "Bot":
+        return None
+    for principal in machine_logins:
+        if login == principal or login == principal.removesuffix("[bot]"):
+            return "Bot", principal
+    return "Bot", login if login.endswith("[bot]") else login + "[bot]"
+
+
+def _history(node, machine_logins):
+    """Complete typed Issue origin/edit evidence, or ``None`` for a partial, deleted or ghost reading."""
+    try:
+        author = _actor_key(node.get("author"), machine_logins)
+        created = _iso(node.get("createdAt"))
+        edits = node["userContentEdits"]
+        page, nodes = edits["pageInfo"], edits["nodes"]
+        if (author is None or created is None or type(edits["totalCount"]) is not int
+                or not isinstance(page, dict) or page.get("hasNextPage") is not False
+                or not isinstance(nodes, list) or edits["totalCount"] != len(nodes)
+                or len(nodes) > MAX_RECORD_EDITS):
+            return None
+        editors, stamps = [], []
+        for item in nodes:
+            if not isinstance(item, dict) or "deletedAt" not in item or item["deletedAt"] is not None:
+                return None
+            editor = _actor_key(item.get("editor"), machine_logins)
+            edited = _iso(item.get("editedAt"))
+            if editor is None or edited is None:
+                return None
+            editors.append(editor)
+            stamps.append(edited)
+        if "lastEditedAt" not in node:
+            return None
+        if node["lastEditedAt"] is None:
+            if nodes:
+                return None
+            origin, current = author, created
+        else:
+            current = _iso(node["lastEditedAt"])
+            origin = _actor_key(node.get("editor"), machine_logins)
+            if current is None or origin is None or not stamps or current != max(stamps):
+                return None
+        if current < created:
+            return None
+        return {"author": author, "origin": origin, "editors": editors, "created": created,
+                "current": current, "times": [created, *stamps]}
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError, OverflowError):
+        return None
+
+
+def _label_id(node, name):
+    """The immutable ID of the ONE current label with this name; a renamed duplicate or next page refuses."""
+    try:
+        labels = node["labels"]
+        if (not isinstance(labels.get("pageInfo"), dict)
+                or labels["pageInfo"].get("hasNextPage") is not False
+                or not isinstance(labels.get("nodes"), list)):
+            return None
+        present = [item for item in labels["nodes"]
+                   if isinstance(item, dict) and item.get("name") == name]
+        if len(present) != 1 or not isinstance(present[0].get("id"), str) or not present[0]["id"]:
+            return None
+        return present[0]["id"]
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError):
+        return None
+
+
+def _latest_label(node, name, machine_logins):
+    """The unique newest event for the CURRENT immutable label ID, with the complete last page present."""
+    try:
+        label_id = _label_id(node, name)
+        timeline = node["timelineItems"]
+        if (label_id is None or not isinstance(timeline.get("pageInfo"), dict)
+                or timeline["pageInfo"].get("hasPreviousPage") is not False
+                or not isinstance(timeline.get("nodes"), list)):
+            return None
+        events = [item for item in timeline["nodes"] if isinstance(item, dict)
+                  and isinstance(item.get("label"), dict) and item["label"].get("id") == label_id]
+        if not events:
+            return None
+        stamps = [_iso(item.get("createdAt")) for item in events]
+        if any(stamp is None for stamp in stamps):
+            return None
+        newest = max(stamps)
+        indexes = [index for index, stamp in enumerate(stamps) if stamp == newest]
+        if len(indexes) != 1:
+            return None
+        return {"actor": _actor_key(events[indexes[0]].get("actor"), machine_logins),
+                "at": newest, "times": stamps}
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError, OverflowError):
+        return None
+
+
+def _commission_envelope(body):
+    """The current Steward's ONE JSON commission in its existing YAML fence, with duplicate keys refused.
+
+    PyYAML is deliberately not a new dependency of this organization-wide module. Other YAML encodings
+    remain unsupported rather than being interpreted by a second, partial YAML parser.
+    """
+    if not isinstance(body, str):
+        return None
+    candidates = []
+    for match in _YAML_FENCE.finditer(body):
+        text = match[1]
+        if re.search(r"\bcommission_version\b", text) is None:
+            continue
+        try:
+            value = json.loads(text, object_pairs_hook=_unique_pairs)
+        except (ValueError, TypeError, RecursionError):
+            return None
+        if not isinstance(value, dict) or "commission_version" not in value:
+            return None
+        candidates.append(value)
+    if len(candidates) != 1 or type(candidates[0]["commission_version"]) is not int:
+        return None
+    return candidates[0] if candidates[0]["commission_version"] == 1 else None
+
+
+def _declared_path(path, *, prefix=False):
+    """A canonical repository path or, where allowed, one trailing-slash directory prefix."""
+    if (not isinstance(path, str) or path != path.strip() or any(char in path for char in "*?[]")):
+        return False
+    if prefix and path.endswith("/") and not path.endswith("//"):
+        path = path[:-1]
+    return _exact_path(path)
+
+
+def _covered(path, envelope):
+    """Whether one exact path or child prefix is contained by an exact/prefix parent envelope."""
+    for parent in envelope:
+        if parent.endswith("/"):
+            if path.startswith(parent):
+                return True
+        elif path == parent:
+            return True
+    return False
+
+
+def _commission_scope(raw, repository, parent, grant_paths):
+    """The child's declared write paths/effects, narrowed by both its parent and the activation record."""
+    try:
+        if raw.get("repository") != repository or raw.get("execution_mode", "create") not in {
+                "create", "modify", "verify"}:
+            return False
+        reconcile, scope, authority = raw["reconcile"], raw["scope"], raw["authority"]
+        if not all(isinstance(value, dict) for value in (reconcile, scope, authority)):
+            return False
+        candidates, allowed = reconcile["candidate_paths"], scope["allowed"]
+        forbidden = scope.get("forbidden", [])
+        if (not isinstance(candidates, list) or not candidates
+                or any(not _declared_path(path) for path in candidates)
+                or not isinstance(allowed, list) or not allowed
+                or any(not _declared_path(path, prefix=True) for path in allowed)
+                or not isinstance(forbidden, list)
+                or any(not isinstance(token, str) for token in forbidden)):
+            return False
+        if any(type(key) is not str or type(value) is not bool for key, value in authority.items()):
+            return False
+        effects = {key for key, value in authority.items() if value}
+        parent_effects = {key for key, value in parent["authority"].items() if value is True}
+        if "repository_write" not in effects or not effects <= parent_effects:
+            return False
+        paths = candidates + allowed
+        envelope = parent["path_envelope"]
+        if any(path.lower().startswith(EXCLUDED_PREFIXES) or not _covered(path, envelope) for path in paths):
+            return False
+        return all(_covered(path, paths) for path in grant_paths)
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError):
+        return False
+
+
+def _machine_admitted_at(served, ref, policy, record_created, paths, resident_admits):
+    """Effective admission of the strict block-bound machine child, or ``None`` on the first unproven fact."""
+    try:
+        node, parent = served["node"], served["authority_parent"]
+        match = REF.fullmatch(ref)
+        if match is None or not isinstance(node.get("body"), str) or node["state"] != "OPEN":
+            return None
+        if (node["repository"]["nameWithOwner"].lower() != match[1].lower()
+                or type(node["number"]) is not int or node["number"] != int(match[2])):
+            return None
+        machine_logins = {login for login, _kind in policy.machine_principals}
+        history = _history(node, machine_logins)
+        if history is None or history["author"][0] != "Bot" or history["author"][1] not in machine_logins:
+            return None
+        machine = history["author"]
+        if history["origin"] != machine or any(editor != machine for editor in history["editors"]):
+            return None
+        label = _latest_label(node, served["label"], machine_logins)
+        if label is None or label["actor"] != machine or label["at"] < history["current"]:
+            return None
+        body = node["body"]
+        if (_ANY_OPERAND_MARKER.search(body) is not None or _ANY_SUCCESSOR_MARKER.search(body) is not None
+                or _ANY_AUTHORITY_FENCE.search(body) is not None):
+            return None
+        parent_ref = _authority_parent(body, ref)
+        parent_match = REF.fullmatch(parent_ref) if parent_ref is not None else None
+        if parent_match is None or not isinstance(parent, dict) or parent["state"] != "OPEN":
+            return None
+        if (parent["repository"]["nameWithOwner"].lower() != parent_match[1].lower()
+                or type(parent["number"]) is not int or parent["number"] != int(parent_match[2])):
+            return None
+        parent_history = _history(parent, machine_logins)
+        operators = policy.operator_principals
+        if parent_history is None:
+            return None
+        parent_actors = [parent_history["author"], parent_history["origin"], *parent_history["editors"]]
+        if any(actor[0] != "User" or actor[1] not in operators for actor in parent_actors):
+            return None
+        if _label_id(parent, "commission") is None:
+            return None
+        authorized = _latest_label(parent, "operator-authorized", machine_logins)
+        if (authorized is None or authorized["actor"] is None or authorized["actor"][0] != "User"
+                or authorized["actor"][1] not in operators):
+            return None
+        block = _fence(parent.get("body"), "standing-authority")
+        if block is None or resident_admits is None or not resident_admits(parent["body"], parent_ref, paths):
+            return None
+        raw = _commission_envelope(body)
+        if raw is None or not _commission_scope(raw, match[1], block, paths):
+            return None
+        observed = history["times"] + label["times"] + parent_history["times"] + authorized["times"]
+        if any(stamp > record_created for stamp in observed):
+            return None
+        admitted = max(label["at"], authorized["at"], parent_history["current"])
+        return admitted if admitted <= record_created else None
+    except (KeyError, TypeError, AttributeError, IndexError, ValueError, OverflowError, RecursionError):
         return None
 
 
@@ -699,16 +991,22 @@ def judge(binding, policy, evidence, repository: str, entries, now: float, *, re
             if path is not None and path not in allowed:
                 return PATH_OUTSIDE_ENVELOPE
     served = facts.get("served")
-    if not _admitted(served, receipt["serves"], policy, now, paths=paths, resident_admits=resident_admits):
-        return SCOPED_GRANT_ADMISSION_UNPROVEN
-    admitted_at = _admitted_at(served)
+    machine_child = (isinstance(served, dict) and isinstance(served.get("node"), dict)
+                     and _machine_login(served["node"].get("author"), machine_logins))
+    if machine_child:
+        admitted_at = _admitted_at(served, receipt["serves"], policy, created, paths, resident_admits)
+    else:
+        if not _admitted(served, receipt["serves"], policy, now, paths=paths, resident_admits=resident_admits):
+            return SCOPED_GRANT_ADMISSION_UNPROVEN
+        admitted_at = _admitted_at(served)
     if admitted_at is None or admitted_at > created:
         return SCOPED_GRANT_ADMISSION_UNPROVEN
     # The receipt (and, through ownership below, the claim) must name the served Issue's CURRENT admitted
     # generation: a still-HELD claim of an old generation cannot authorize a changed mission.
     digest = receipt["generation"].split("@", 1)[1]
     version = "intent-v1" if digest.startswith("intent-v1:") else "v0"
-    if receipt["generation"] != current_generation(receipt["serves"], served["node"]["body"], version):
+    if receipt["generation"] != current_generation(receipt["serves"], served["node"]["body"], version,
+                                                   json_commission=machine_child):
         return SCOPED_GRANT_GENERATION_UNBOUND
     if not _owned(facts, receipt, machine_logins, created):
         return SCOPED_GRANT_OWNER_UNPROVEN
