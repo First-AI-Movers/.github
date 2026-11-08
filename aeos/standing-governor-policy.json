@@ -178,6 +178,12 @@
       "schema": "aeos-operator-approval/v1",
       "activation": "enabled"
     },
+    "accepted_change_maintenance": {
+      "schema": "aeos-accepted-change-maintenance/v1",
+      "activation": "enabled",
+      "max_entries": 12,
+      "max_lifetime_seconds": 604800
+    },
     "accepted_changes": [
       {
         "schema": "aeos-accepted-change/v1",

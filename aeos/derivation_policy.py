@@ -74,6 +74,7 @@ import tempfile
 import time
 
 import accepted_change
+import accepted_change_maintenance
 import comment_operand
 import operator_approval
 import scoped_grant
@@ -216,6 +217,7 @@ class Policy:
         "scoped_grant",
         "operator_approval",
         "accepted_changes",
+        "accepted_change_maintenance",
     )
 
     def __init__(self, document: dict) -> None:
@@ -245,6 +247,9 @@ class Policy:
         self.operator_approval = route.get("operator_approval")
         # #3052: exact protected changes the operator accepted in trusted policy (``accepted_change.validate``).
         self.accepted_changes = route.get("accepted_changes") or []
+        # #3052: the class that refreshes ``accepted_changes`` without an approving review
+        # (``accepted_change_maintenance.validate_binding``); absent means the class does not exist.
+        self.accepted_change_maintenance = route.get("accepted_change_maintenance")
 
     @property
     def machine_route_enabled(self) -> bool:
@@ -361,7 +366,7 @@ def parse_policy(raw: bytes) -> Policy:
             if (not isinstance(route, dict)
                     or set(route) - {"machine_principals", "operator_principals", "decision", "comment_operand",
                                      "authority_compiler", "scoped_grant", "operator_approval",
-                                     "accepted_changes"}):
+                                     "accepted_changes", "accepted_change_maintenance"}):
                 raise ValueError("machine_route has unknown keys")
             machines = route.get("machine_principals")
             operators = route.get("operator_principals")
@@ -399,6 +404,8 @@ def parse_policy(raw: bytes) -> Policy:
                 scoped_grant.validate_binding(route["scoped_grant"], compiler=route.get("authority_compiler"))
             if "operator_approval" in route:
                 operator_approval.validate_binding(route["operator_approval"])
+            if "accepted_change_maintenance" in route:
+                accepted_change_maintenance.validate_binding(route["accepted_change_maintenance"])
             if "accepted_changes" in route:
                 prefixes, files = tuple(policy["allowlist_prefixes"]), frozenset(policy["allowlist_files"])
                 accepted_change.validate(

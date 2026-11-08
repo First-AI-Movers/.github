@@ -78,6 +78,10 @@ jobs:
           AEOS_ACTOR: ${{ github.actor }}
           AEOS_REPOSITORY: ${{ github.repository }}
           AEOS_ACTOR_EVIDENCE: ${{ runner.temp }}/aeos-actor-evidence.json
+          # #3052 accepted-change maintenance: a READ-ONLY credential for the carrier repository, absent today. Without
+          # it a carrier is recorded as unread and the class refuses, so the approval route stands. It is handed to
+          # this step only, never to the gate, and only the carrier reads below ever see it.
+          AEOS_CARRIER_READ_TOKEN: ${{ secrets.AEOS_CARRIER_READ_TOKEN }}
         run: |
           set -uo pipefail
           python3 - <<'PY'
@@ -130,6 +134,26 @@ jobs:
                               api, repo, pr.get("number"), head_sha, body)
                   except Exception:  # noqa: BLE001 - recorded, never raised past the other evidence
                       doc["pull_request"]["approval"] = {"context": "UNREAD", "reviews": None}
+                  # #3052 accepted-change maintenance: the carrier pull requests the policy change names, read with the
+                  # carrier credential and their protected-diff digests RECOMPUTED here by the trusted policy. Only when
+                  # the trusted policy switches the class on; any failure records an unread context the judge refuses.
+                  try:
+                      import accepted_change_maintenance
+                      if accepted_change_maintenance.enabled(getattr(trusted, 'accepted_change_maintenance', None)):
+                          carrier_token = os.environ.get("AEOS_CARRIER_READ_TOKEN", "")
+                          def carrier_api(path, *args):
+                              r = subprocess.run(["gh", "api", path, *args], capture_output=True, text=True, timeout=30,
+                                                 check=False, env=dict(os.environ, GH_TOKEN=carrier_token))
+                              return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+                          shown = subprocess.run(["git", "-C", "candidate", "show",
+                                                  f"{head_sha}:{accepted_change_maintenance.POLICY_PATH}"],
+                                                 capture_output=True, timeout=30, check=False)
+                          doc["accepted_change_maintenance"] = accepted_change_maintenance.collect(
+                              trusted, repo, shown.stdout if shown.returncode == 0 else b"", api,
+                              carrier_api if carrier_token else None, pr.get("number"), head_sha, body,
+                              token=carrier_token)
+                  except Exception:  # noqa: BLE001 - recorded, never raised past the other evidence
+                      doc["accepted_change_maintenance"] = {"context": "UNREAD", "carriers": []}
                   refs = re.findall(r"<!--\s*aeos-programme:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*)\s*-->", body)
                   if len(refs) == 1:
                       prepo, number = refs[0].split("#")

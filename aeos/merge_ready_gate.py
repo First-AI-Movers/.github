@@ -53,6 +53,7 @@ from control_plane_proof import (  # noqa: E402
     evaluate_control_plane_deletion,
     evaluate_control_plane_file,
 )
+import accepted_change_maintenance  # noqa: E402
 import derivation_policy  # noqa: E402
 import operator_approval  # noqa: E402
 
@@ -1013,6 +1014,42 @@ class Report:
         self.primary = self.findings[0].code if self.findings else None
 
 
+def maintenance_refusal(candidate_dir, changes, judge_policy, policy_dir, evidence, repository, head_sha, now):
+    """``None`` when this machine-authored change to the policy file is an in-class refresh of its accepted-change
+    list (``accepted_change_maintenance``); otherwise the one typed reason it is not. It only ever admits: a pull
+    request it refuses is judged exactly as it was before the class existed."""
+    if judge_policy is None:
+        return accepted_change_maintenance.UNBOUND
+    try:
+        base_raw = head_raw = trusted_raw = b""
+        head_policy = None
+        only = [c for c in changes if c.path == accepted_change_maintenance.POLICY_PATH]
+        if len(changes) == 1 and len(only) == 1 and only[0].status == "M":
+            change = only[0]
+            shas = sorted({change.blob_sha, change.base_blob_sha})
+            if not all(re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha or "") and set(sha) != {"0"} for sha in shas):
+                return accepted_change_maintenance.HEAD_POLICY_INVALID
+            sizes = blob_sizes(candidate_dir, shas)
+            if any(sizes.get(sha, derivation_policy.MAX_POLICY_BYTES + 1) > derivation_policy.MAX_POLICY_BYTES
+                   for sha in shas):
+                return accepted_change_maintenance.HEAD_POLICY_INVALID
+            blobs = read_blobs(candidate_dir, shas)
+            base_raw, head_raw = blobs.get(change.base_blob_sha), blobs.get(change.blob_sha)
+            if base_raw is None or head_raw is None:
+                return accepted_change_maintenance.HEAD_POLICY_INVALID
+            with open(os.path.join(policy_dir, derivation_policy.POLICY_FILE), "rb") as handle:
+                trusted_raw = handle.read()
+            try:
+                head_policy = derivation_policy.parse_policy(head_raw)
+            except derivation_policy.PolicyError:
+                head_policy = None
+        return accepted_change_maintenance.refusal(
+            judge_policy, evidence, repository, head_sha, changed=changes, trusted_raw=trusted_raw,
+            base_raw=base_raw, head_policy=head_policy, head_raw=head_raw, now=now)
+    except Exception:  # noqa: BLE001 - an unreadable change is never admitted
+        return accepted_change_maintenance.HEAD_POLICY_INVALID
+
+
 def identified_operator(policy, evidence):
     """The policy-repository lock-5 authorship and run-actor rule."""
     if policy is None or not isinstance(evidence, dict):
@@ -1179,12 +1216,22 @@ def evaluate(
                             if judge_policy is not None else operator_approval.OPERATOR_APPROVAL_UNBOUND)
             if not operator_identified and approval is None:
                 report.approval_dependent = True
+            # #3052: a refresh of the accepted-change list is not a decision about who judges machines. It needs no
+            # approving review when, and only when, the class proves every conjunct (accepted_change_maintenance).
+            maintenance = None
             if not operator_identified and approval is not None:
+                maintenance = maintenance_refusal(candidate_dir, changes, judge_policy, policy_dir, evidence,
+                                                  repository, head_sha, now())
+                if maintenance is None:
+                    report.notes.append("accepted-change maintenance: the policy change refreshes only "
+                                        "machine_route.accepted_changes and every entry is proved against its carrier")
+            if not operator_identified and approval is not None and maintenance is not None:
                 report.findings.append(Finding(
                     CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR, sorted(report.control_plane)[0],
                     "only a positively identified operator, or his approval of this exact machine-authored "
                     f"head, may change the policy that judges machine principals: author={author!r} "
-                    f"({kind!r}) actor={actor!r}; operator approval: {approval}",
+                    f"({kind!r}) actor={actor!r}; operator approval: {approval}; "
+                    f"accepted-change maintenance: {maintenance}",
                 ))
     strict = {p.lower() for p in report.control_plane}
 
