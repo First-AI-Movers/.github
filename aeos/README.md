@@ -24,6 +24,7 @@ pull-request-body semantics, and no waiting.
 | --- | --- |
 | Changed control-plane paths satisfy the strict lane below | `WORKFLOW_POLICY_VIOLATION` · `CONTROL_PLANE_PROOF_FAILED` |
 | A control-plane change in this policy repository neither authored and run by an identified operator nor approved by one on its exact machine-authored head | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
+| A control-plane change in this policy repository that is not, in full, an in-class refresh of `machine_route.accepted_changes` (below) | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | A control-plane **deletion** in this policy repository | `CONTROL_PLANE_CHANGE_REQUIRES_OPERATOR` |
 | No high-confidence credential shape in changed text | `SECRET_SHAPE_DETECTED` |
 | No high-confidence credential shape in any revision the range introduces | `SECRET_SHAPE_DETECTED` |
@@ -497,7 +498,9 @@ change what its own checks do: a module can rebind another module's validator wi
 bytes. A change to one of them is therefore a decision about one exact change, never a class. `machine_route.accepted_changes` (`aeos/accepted_change.py`, agent-toolkit #3052) lets the operator make
 that decision once for a set of such changes, by approving the policy change that lists them, instead of
 approving each pull request. Each entry is exactly
-`{schema: aeos-accepted-change/v1, repository, protected_diff_sha256, paths, issued_at, not_after, activation, decision}`.
+`{schema: aeos-accepted-change/v1, repository, protected_diff_sha256, paths, issued_at, not_after, activation, decision}`
+and optionally `carrier: {pull_request, head_sha}`, the pull request the entry was prepared for. The acceptance route
+below never reads `carrier` (the digest alone selects an entry); accepted-change maintenance requires it.
 
 An entry names the change, not a pull request: the canonical protected-diff digest the gate already computes (every
 protected path with its status and the SHA-256 of its bytes before and after). The digest carries no base or head
@@ -554,6 +557,69 @@ Residuals, stated:
   same change the operator accepted, and the window bounds it.
 - As with every route that judges a candidate's diff from its merge base, two separately accepted changes to one
   file that merge cleanly together land as their union.
+
+### Accepted-change maintenance — a refresh of the list needs no approving review
+
+Every batch of `machine_route.accepted_changes` used to reach `main` only on the operator's no-content APPROVE of the
+exact head (23 times between #59 and #84), although both organization rulesets already require zero approving
+reviews. A refresh is mechanical, and the entries are already bound by a digest the consumer's judge recomputes, so
+the click bought no assurance (agent-toolkit #3052, principal direction 2026-11-07). `aeos/accepted_change_maintenance.py`
+(bound by `machine_route.accepted_change_maintenance` = `{schema: aeos-accepted-change-maintenance/v1, activation,
+max_entries, max_lifetime_seconds}`) is the smallest class that removes that click and nothing else.
+
+A pull request in this repository is admitted WITHOUT an approving review only when every conjunct holds. Each
+refuses with its own `ACCEPTED_CHANGE_MAINTENANCE_*` reason (the identity conjuncts keep the `OPERATOR_APPROVAL_*`
+reasons they share), and a refusal leaves the pull request on the operator-approval route exactly as before:
+- the class is bound and `enabled` in the TRUSTED policy (`UNBOUND`, `DISABLED`);
+- the machine principal authored it, ran it and committed its head, for this repository and this head
+  (`operator_approval.identity_refusal`: the same conjuncts, shared, not restated), and a `pull_request` event;
+- the pull request, read fresh before and after the carriers, still has the evaluated head and description
+  (`STALE_CONTEXT`);
+- the change is exactly one path, `aeos/standing-governor-policy.json`, a modification of a regular file
+  (`NOT_ONLY_POLICY_FILE`: a second file, a deletion, a new file, a mode change), on the base the trusted policy
+  is (`BASE_NOT_CURRENT`: main moved after the branch was cut, so the branch is rebuilt on current `main`);
+- the head parses and validates as a policy (`HEAD_POLICY_INVALID`), and removing `machine_route.accepted_changes`
+  from the trusted and the head document leaves them equal (`OTHER_KEYS_CHANGED`). Roots, allowlists, members,
+  signers, principals, every other `activation`, `operator_approval`, `scoped_grant`, `authority_compiler` and this
+  class's own binding, ceilings included, are the operator's;
+- the entries after the change are at most the BASE binding's `max_entries` (`CEILING_EXCEEDED`), and something
+  changed (`NO_CHANGE`);
+- every entry the head adds or changes (a renewal counts as a change): is for the policy's own target repository
+  (`REPOSITORY_OUT_OF_CLASS`: tailnet-policy entries bind every changed path with no allowlist and keep the approval
+  route); has begun and has not expired (`ENTRY_NOT_YET_VALID`, `ENTRY_EXPIRED`) and ends within the base binding's
+  `max_lifetime_seconds` of now (`LIFETIME_EXCEEDED`); pins its carrier (`CARRIER_UNPINNED`); and that carrier is in the
+  evidence (`CARRIER_UNREAD`), open (`CARRIER_NOT_OPEN`), authored by the machine principal (`CARRIER_NOT_MACHINE`),
+  still at the pinned head (`CARRIER_HEAD_MISMATCH`), has the entry's digest RECOMPUTED from its actual head
+  (`CARRIER_DIGEST_MISMATCH`) and exactly its paths (`CARRIER_PATHS_MISMATCH`). Each path is inside the derivation
+  allowlist, is not a root or a package replacing one, and is not under `.github/` or `aeos/` (`PATH_OUT_OF_CLASS`).
+  The carrier deletes no protected path (`CARRIER_DELETES_PROTECTED_PATH`) and no control-plane or credential path
+  (`CARRIER_DELETES_CONTROL_PLANE`: `.github/`, `aeos/`, `.gitattributes`, `.env*`, key and certificate files, a
+  `secrets`/`credentials`/`.ssh` directory); a rename counts as a deletion of its source;
+- every entry the head removes was never live (disabled), has lapsed (`not_after` passed), or is spent: its pinned
+  carrier is closed or merged, read from GitHub. Anything else is `UNSPENT_ENTRY_REMOVED`: an unspent live entry is
+  never removed by this class, and an entry that pins no carrier can only lapse.
+
+The bounds are in the BASE policy (`max_entries`, `max_lifetime_seconds`, never above the acceptance route's own
+limits of 16 entries and 7 days) and the repository is the policy's target; a candidate that edits them edits the
+class's binding, which is `OTHER_KEYS_CHANGED`. The gate stays networkless. The trusted workflow's evidence step
+(`accepted_change_maintenance.collect`, only while the class is `enabled`) reads the pull request fresh before and
+after the carriers, reads each carrier with `AEOS_CARRIER_READ_TOKEN`, fetches the carrier's merge base and head into a
+throwaway repository as data (blobs only for the allowlisted modules the closure reads, requested in one fetch; the
+credential in that repository's own config file, never on a command line) and recomputes the protected-diff digest with the same derivation functions the consumer's
+judge uses and the trusted policy. Nothing from the carrier or the candidate is executed.
+
+**The carrier credential is the one fact this repository cannot supply.** The `GITHUB_TOKEN` of this repository's run
+cannot read a private repository, and the hosted gate has no other credential. `AEOS_CARRIER_READ_TOKEN` is an Actions
+secret that does not exist today. Until a read-only credential for the carrier repository (contents and pull requests,
+nothing else) is provisioned by whoever governs repository secrets, the evidence records
+`unavailable: no read credential for the carrier repository`, every added entry is `CARRIER_UNREAD`, and the class
+admits no addition. Removals of lapsed or never-live entries need no carrier read and are admitted now. The secret is
+handed to the evidence step only, never to the gate step. A pull request that edits this workflow runs its own copy of
+that step with the secret, as for any secret in a `pull_request` workflow; the workflow change itself still needs the
+operator's approval to merge.
+
+Rollback: `activation: disabled` restores the predecessor exactly. Adding or changing this class changes the gate's
+trusted policy and code, so it is judged by its predecessor and takes the operator's exact-head approval once.
 
 ### Machine-route reason on signature-route findings
 

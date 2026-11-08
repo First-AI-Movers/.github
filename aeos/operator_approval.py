@@ -90,6 +90,14 @@ def collect(api, repository: str, number, head_sha, body) -> dict:
     return {"context": CONTEXT_CURRENT, "reviews": reviews}
 
 
+def pull_context(api, repository: str, number, head_sha, body) -> str:
+    """One fresh read of the pull request, as a context: ``CURRENT`` only while it still shows ``head_sha`` and
+    ``body``. Any other outcome is not ``CURRENT`` (an unreadable pull request is ``UNREAD``)."""
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        return CONTEXT_UNREAD
+    return _context(api(f"repos/{repository}/pulls/{number}"), head_sha, body)
+
+
 def _context(current, head_sha, body) -> str:
     """Whether one fresh read of the pull request still shows the event's head and body."""
     if not isinstance(current, dict) or not isinstance(current.get("head"), dict):
@@ -142,26 +150,11 @@ def refusal(policy, evidence, repository: str, head_sha: str) -> str | None:
         return OPERATOR_APPROVAL_UNBOUND
     if binding.get("activation") != "enabled":
         return OPERATOR_APPROVAL_DISABLED
-    # A merge-group run judges the queue's commit, which no review can name, so it is never provable here.
-    if (not isinstance(evidence, dict) or evidence.get("event") != "pull_request"
-            or not isinstance(evidence.get("pull_request"), dict)):
-        return OPERATOR_APPROVAL_EVENT_UNPROVABLE
+    identity = identity_refusal(policy, evidence, repository, head_sha)
+    if identity is not None:
+        return identity
     pr = evidence["pull_request"]
-    machines = set(policy.machine_principals)
-    machine_logins = {login for login, _kind in machines}
-    if (pr.get("author_login"), pr.get("author_type")) not in machines:
-        return OPERATOR_APPROVAL_AUTHOR_NOT_MACHINE
-    # The machine runs it and commits its head: an operator push or reopen is judged by the predecessor rule.
-    if evidence.get("actor") not in machine_logins:
-        return OPERATOR_APPROVAL_TRIGGER_NOT_MACHINE
-    if pr.get("head_commit_author_login") not in machine_logins:
-        return OPERATOR_APPROVAL_HEAD_COMMIT_NOT_MACHINE
-    if (not isinstance(evidence.get("repository"), str) or not isinstance(repository, str)
-            or evidence["repository"].strip().lower() != repository.strip().lower()):
-        return OPERATOR_APPROVAL_REPOSITORY_MISMATCH
     head = (head_sha or "").strip().lower()
-    if _SHA.fullmatch(head) is None or pr.get("head_sha") != head:
-        return OPERATOR_APPROVAL_HEAD_MISMATCH
     approval = pr.get("approval")
     if not isinstance(approval, dict) or approval.get("context") not in CONTEXTS:
         return OPERATOR_APPROVAL_REVIEWS_UNREADABLE
@@ -184,6 +177,35 @@ def refusal(policy, evidence, repository: str, head_sha: str) -> str | None:
         return OPERATOR_APPROVAL_NOT_APPROVED
     if latest["commit_id"] != head:
         return OPERATOR_APPROVAL_STALE_HEAD
+    return None
+
+
+def identity_refusal(policy, evidence, repository: str, head_sha: str) -> str | None:
+    """``None`` when ``evidence`` shows a ``pull_request`` event authored, triggered and head-committed by the
+    pinned machine principal, for ``repository`` and exactly ``head_sha``; otherwise the ONE typed reason.
+
+    These are the route's identity conjuncts, shared with every other machine-only admission in this repository
+    (``accepted_change_maintenance``) so that none restates them."""
+    # A merge-group run judges the queue's commit, which no review can name, so it is never provable here.
+    if (not isinstance(evidence, dict) or evidence.get("event") != "pull_request"
+            or not isinstance(evidence.get("pull_request"), dict)):
+        return OPERATOR_APPROVAL_EVENT_UNPROVABLE
+    pr = evidence["pull_request"]
+    machines = set(policy.machine_principals)
+    machine_logins = {login for login, _kind in machines}
+    if (pr.get("author_login"), pr.get("author_type")) not in machines:
+        return OPERATOR_APPROVAL_AUTHOR_NOT_MACHINE
+    # The machine runs it and commits its head: an operator push or reopen is judged by the predecessor rule.
+    if evidence.get("actor") not in machine_logins:
+        return OPERATOR_APPROVAL_TRIGGER_NOT_MACHINE
+    if pr.get("head_commit_author_login") not in machine_logins:
+        return OPERATOR_APPROVAL_HEAD_COMMIT_NOT_MACHINE
+    if (not isinstance(evidence.get("repository"), str) or not isinstance(repository, str)
+            or evidence["repository"].strip().lower() != repository.strip().lower()):
+        return OPERATOR_APPROVAL_REPOSITORY_MISMATCH
+    head = (head_sha or "").strip().lower()
+    if _SHA.fullmatch(head) is None or pr.get("head_sha") != head:
+        return OPERATOR_APPROVAL_HEAD_MISMATCH
     return None
 
 

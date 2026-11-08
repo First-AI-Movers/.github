@@ -600,6 +600,8 @@ class WorkflowTests(unittest.TestCase):
     def bound(activation="enabled"):
         document = json.loads(POLICY_FILE.read_text())
         document["machine_route"]["operator_approval"]["activation"] = activation
+        # These tests are about the approval collector alone: the maintenance class collects its own evidence.
+        document["machine_route"].pop("accepted_change_maintenance", None)
         return dp.parse_policy(json.dumps(document).encode())
 
     def test_reviews_are_collected_only_when_the_route_is_switched_on(self):

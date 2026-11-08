@@ -60,6 +60,12 @@ in every other repository it is the App check `aeos-merge-judge`.
   it never approves, and an approval is stale after any push. So the operator is
   never asked to open, arm or babysit a policy PR; prepare it, open it as the machine,
   arm auto-merge, and put the decision in plain words at the top for his Approve.
+- **One carve-out inside the first exception, deliberately narrow.** A machine-authored change to
+  `aeos/standing-governor-policy.json` that edits only `machine_route.accepted_changes` (adding entries whose
+  carriers the trusted workflow proves, retiring spent or lapsed ones) is admitted without an approving review by
+  `aeos/accepted_change_maintenance.py`. Every other key of that file, the judge, the workflow and the tests keep the
+  rule above; a refusal of the carve-out leaves the pull request on the approval route unchanged. The contract is
+  `aeos/README.md` ("Accepted-change maintenance").
 - **Deleting a control-plane path.** A deletion has no bytes, so no content floor
   can measure it, and this deletion reaches the gate that judges the whole
   organization. It is refused whoever authors it; an organization administrator

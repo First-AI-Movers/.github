@@ -50,6 +50,11 @@ SCHEMA = "aeos-accepted-change/v1"
 ACTIVATIONS = ("enabled", "disabled")
 ENTRY_KEYS = frozenset({"schema", "repository", "protected_diff_sha256", "paths", "issued_at", "not_after",
                         "activation", "decision"})
+#: Optional. The carrier pull request an entry was prepared for, ``{pull_request, head_sha}``. Nothing in the gate's
+#: acceptance route reads it (the digest alone selects an entry); ``accepted_change_maintenance`` requires it on an
+#: entry it adds, so that the entry can be proved against, and later retired with, the pull request it names.
+CARRIER_KEY = "carrier"
+CARRIER_KEYS = frozenset({"pull_request", "head_sha"})
 MAX_ENTRIES = 16
 MAX_PATHS = 32
 MAX_DECISION_CHARS = 500
@@ -106,8 +111,11 @@ def validate(entries, *, target_repository, in_allowlist) -> None:
         raise ValueError("accepted_changes must be a list")
     seen = set()
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != ENTRY_KEYS or entry.get("schema") != SCHEMA:
-            raise ValueError(f"each accepted change is exactly {sorted(ENTRY_KEYS)} with schema {SCHEMA}")
+        if (not isinstance(entry, dict) or set(entry) - {CARRIER_KEY} != ENTRY_KEYS or entry.get("schema") != SCHEMA):
+            raise ValueError(f"each accepted change is exactly {sorted(ENTRY_KEYS)} (and optionally "
+                             f"{CARRIER_KEY!r}) with schema {SCHEMA}")
+        if CARRIER_KEY in entry and not carrier_pin(entry[CARRIER_KEY]):
+            raise ValueError("an accepted change's carrier is exactly {pull_request: positive int, head_sha: 40 hex}")
         repository = entry["repository"]
         if (not isinstance(repository, str) or not _REPO.fullmatch(repository)
                 or repository.lower() not in (target_repository, TAILNET_REPOSITORY)):
@@ -132,6 +140,16 @@ def validate(entries, *, target_repository, in_allowlist) -> None:
             if repository.lower() != TAILNET_REPOSITORY and (
                     path.lower().startswith(EXCLUDED_PREFIXES) or not in_allowlist(path)):
                 raise ValueError(f"accepted change path {path!r} may never be accepted")
+
+
+_HEAD = re.compile(r"[0-9a-f]{40}")
+
+
+def carrier_pin(value) -> bool:
+    """Whether ``value`` is a well-formed ``carrier``: one pull request number and the full head it was prepared at."""
+    return (isinstance(value, dict) and set(value) == CARRIER_KEYS
+            and type(value["pull_request"]) is int and value["pull_request"] >= 1
+            and isinstance(value["head_sha"], str) and _HEAD.fullmatch(value["head_sha"]) is not None)
 
 
 def entry_for(entries, repository: str, digest: str):
