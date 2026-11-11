@@ -188,6 +188,22 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "c50813462496a1a307f0734b717b3fca195542896a813fa080004f78a9427bc8",
+        "paths": [
+          "scripts/agent_relay/standing_seat_governor.py"
+        ],
+        "issued_at": "2026-11-11T12:01:00Z",
+        "not_after": "2026-11-18T12:01:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 13): agent-toolkit PR 19941's exact protected change at its current merge base. A standing-seat Governor turn may carry one Launchpad request, which the wrapper posts on its own ceiling under the seat's origin marker and handle, so a Governor commissions its own producer instead of wedging (#3732 c6794688685).",
+        "carrier": {
+          "pull_request": 19941,
+          "head_sha": "19ea5314ba103975b37ff0ff9cd74bb11c0d20f0"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "0c45ff6395727d74acafa0a33e291e902f60b0153247b82e2107d933fad0fd5d",
         "paths": [
           "scripts/agent_relay/standing_seat_governor.py"
