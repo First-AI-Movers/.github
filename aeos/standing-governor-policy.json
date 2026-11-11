@@ -249,6 +249,22 @@
           "pull_request": 19841,
           "head_sha": "fe027db5332a2cc7e3736833630905cc4671bf7e"
         }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "262307eb3d258da70ad094fa21c9f542e8509fd9d55a58e57cee6e0e75848e13",
+        "paths": [
+          "scripts/agent_relay/standing_seat_governor.py"
+        ],
+        "issued_at": "2026-11-11T20:00:00Z",
+        "not_after": "2026-11-18T20:00:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 15): agent-toolkit PR 19970's exact protected change at its current merge base. A Governor park whose only machine lane was already met or dropped at its stamp is refused before it posts, so a seat is no longer stranded on a park nothing can release (scout-governor-2228 g1042, #3732 c6805247396).",
+        "carrier": {
+          "pull_request": 19970,
+          "head_sha": "f569a209ea58a46822390dee075eedab240649fa"
+        }
       }
     ]
   }
