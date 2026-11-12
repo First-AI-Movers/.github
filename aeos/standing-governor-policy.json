@@ -313,6 +313,22 @@
           "pull_request": 19970,
           "head_sha": "f569a209ea58a46822390dee075eedab240649fa"
         }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "3690ef012ec90fb4115c9bcf0991af2f6392804b79b67f3a4622843416830ceb",
+        "paths": [
+          "scripts/agent_relay/standing_seat_governor.py"
+        ],
+        "issued_at": "2026-11-12T11:40:00Z",
+        "not_after": "2026-11-19T11:40:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 18): agent-toolkit PR 20107's exact protected change at its current merge base. A standing-seat Governor's Launchpad request reaches the request door with prose constraints, so a seat's self-commission is admitted instead of refused INVALID_REQUEST_FIELD (#3732, #4396 c6821921493).",
+        "carrier": {
+          "pull_request": 20107,
+          "head_sha": "f0edc9d7b74d44e5a96865c88f385a07a978654c"
+        }
       }
     ]
   }
