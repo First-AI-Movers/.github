@@ -188,6 +188,40 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "70aeeda08b248d013195e77f67a1783bb80dfbf0f30e729a78dc761f863f70c7",
+        "paths": [
+          "scripts/flight_deck/models.py"
+        ],
+        "issued_at": "2026-11-12T18:50:00Z",
+        "not_after": "2026-11-19T18:50:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 19): agent-toolkit PR 20254's exact protected change at its current merge base. The Flight Deck models reword one error message and three comments so they no longer tell a reader the operator must act, with no behaviour or typing change (#20178).",
+        "carrier": {
+          "pull_request": 20254,
+          "head_sha": "8878dc88761885d4e38f6b60a49e9062b8c826c5"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "7093135fb01e6a515fc4257b0df693058e5e27115ba122cdcdc7e1490e90de5c",
+        "paths": [
+          "scripts/agent_relay/approval_provenance.py",
+          "scripts/agent_relay/ledger.py",
+          "scripts/flight_deck/control_ingest.py"
+        ],
+        "issued_at": "2026-11-12T18:50:00Z",
+        "not_after": "2026-11-19T18:50:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 19): agent-toolkit PR 20255's exact protected change at its current merge base. Damaged-store halts in the control ingest, approval provenance and the ledger name the route that handles the damage instead of sending the reader to the operator, with exception types and halt behaviour unchanged (#20179).",
+        "carrier": {
+          "pull_request": 20255,
+          "head_sha": "744b715ea581355479e10f7a7c6b64d8c0e4593c"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "59c1a4dce91c4ffa83545d7a796b51cd49ce7ae55f24e34136200ef6395141cf",
         "paths": [
           "scripts/launch_managed_session.py"
