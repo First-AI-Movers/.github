@@ -188,6 +188,22 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "59c1a4dce91c4ffa83545d7a796b51cd49ce7ae55f24e34136200ef6395141cf",
+        "paths": [
+          "scripts/launch_managed_session.py"
+        ],
+        "issued_at": "2026-11-11T19:28:00Z",
+        "not_after": "2026-11-18T19:28:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 14): agent-toolkit PR 19954's exact protected change at its current merge base. A session started by launch_managed_session.py receives the same session scratch folder and cache environment a TTL lane gets, created before its first turn, so its writes no longer drift into the home directory (#17383, #17368).",
+        "carrier": {
+          "pull_request": 19954,
+          "head_sha": "9ac628a09fb80d9b0101f5fb9fad49e82689089b"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "c50813462496a1a307f0734b717b3fca195542896a813fa080004f78a9427bc8",
         "paths": [
           "scripts/agent_relay/standing_seat_governor.py"
