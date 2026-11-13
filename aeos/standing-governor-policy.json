@@ -188,50 +188,98 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "52c3350e3d7512ed6b14aa62d01e2bbc2244b46a456a0554d3ff1b862edbff6a",
+        "protected_diff_sha256": "a6923b01007dadf06708e13ebfa2fa021abbb6f67939dfad487fe840c4a970c0",
         "paths": [
-          "scripts/flight_deck/governed_sessions.py"
+          "scripts/agent_relay/integrate.py",
+          "scripts/agent_relay/remote_dispatch_execute.py"
         ],
-        "issued_at": "2026-11-12T20:33:00Z",
-        "not_after": "2026-11-19T20:33:00Z",
+        "issued_at": "2026-11-13T11:10:00Z",
+        "not_after": "2026-11-20T11:10:00Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 20): agent-toolkit PR 20199's exact protected change at its current merge base. The Governor kit's governor.effect reader admits the listener wake channel with exactly the three closed wake shapes the wake evaluator owns, inert until a writer admits the channel (#20148).",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 23): agent-toolkit PR 20225's exact protected change at its current merge base. Listener and Team Factory gate reason text names the typed cause and its owner instead of 'the operator', with no behaviour, flag or classification change (#20180).",
         "carrier": {
-          "pull_request": 20199,
-          "head_sha": "bc8620795879501742d6b8dbb7bc57b55ef34a90"
+          "pull_request": 20225,
+          "head_sha": "d26f2383d91e2fd85ece97b95233b7c20daed9e2"
         }
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "e29ef5d4ef2fafe53d31f4841e8f109b86b9f297660f21fff0c6d677f3a26901",
+        "protected_diff_sha256": "99e0cd374a02166d990bed95363ae7278eb4567b12e0c811cfb1073c3c18d2a5",
         "paths": [
-          "scripts/agent_relay/ledger.py",
-          "scripts/flight_deck/control_ingest.py"
+          "scripts/agent_relay/work_placement.py"
         ],
-        "issued_at": "2026-11-13T06:55:00Z",
-        "not_after": "2026-11-20T06:55:00Z",
+        "issued_at": "2026-11-13T11:10:00Z",
+        "not_after": "2026-11-20T11:10:00Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 21): agent-toolkit PR 20300's exact protected change at its current merge base. Eight damaged-store halt and hint messages in the control ingest and the Agent Relay ledger name the owner that clears them instead of sending the reader to the operator, with exception types and halt behaviour unchanged (#20290).",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 23): agent-toolkit PR 20270's exact protected change at its current merge base. Equal-load Cell ties in Conductor placement spread by a deterministic (issue, cell) rendezvous hash instead of by name (#15212).",
         "carrier": {
-          "pull_request": 20300,
-          "head_sha": "25ab64276f2ed7c1c9e2c42005d29efa1015feef"
+          "pull_request": 20270,
+          "head_sha": "6b23bdc6f4267ab041f05f1cfbe4cfe96fbdaecc"
         }
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "969d3ac17dec167040fc715642d9f1d97888081d94d089ba5bb51b0f2029fa90",
+        "protected_diff_sha256": "0a2e90babd6c4b5bdf0830a5ac6b14b3c145904dec1f23c7a88d4f1f4162746e",
+        "paths": [
+          "scripts/agent_relay/dispatcher.py"
+        ],
+        "issued_at": "2026-11-13T11:10:00Z",
+        "not_after": "2026-11-20T11:10:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 23): agent-toolkit PR 20304's exact protected change at its current merge base. Two dispatcher durable-state readers use the existing shared bounded JSON reader (8 MiB, depth 64) so Python 3.12 and 3.14 answer alike (Refs #15445).",
+        "carrier": {
+          "pull_request": 20304,
+          "head_sha": "cf1043b50bbdc9f5d99ccc2e4ceeafea8246f023"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "82bbd2890a155fb7a69cb465bf05eb5e924a7b52c9674a5e88723319491cda95",
+        "paths": [
+          "scripts/agent_relay/standing_ceiling.py"
+        ],
+        "issued_at": "2026-11-13T11:10:00Z",
+        "not_after": "2026-11-20T11:10:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 23): agent-toolkit PR 20310's exact protected change at its current merge base. Two standing-ceiling GitHub policy loaders use the existing shared 1 MiB / depth-64 JSON decoder before parsing (Refs #15445).",
+        "carrier": {
+          "pull_request": 20310,
+          "head_sha": "de86d73dd0d0881c4e56a286164291bb74808989"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "bbf2413eaf001306f3f02fc121aa73114b4a99b04aa287f4dccbf118e9c6dbec",
         "paths": [
           "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-11-13T07:00:00Z",
-        "not_after": "2026-11-20T07:00:00Z",
+        "issued_at": "2026-11-13T11:10:00Z",
+        "not_after": "2026-11-20T11:10:00Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 22): agent-toolkit PR 20344's exact protected change at its current merge base. A kit Governor whose bound programme is in a public repository is woken, and posts its receipts, on the verified private owning surface the Launchpad already uses; the Flight Deck fold accepts exactly that wake and a public Issue still never takes a machine comment (#20335).",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 23): agent-toolkit PR 20361's exact protected change at its current merge base. The Governor kit's governor.effect reader and Noah fold admit the listener wake channel with exactly the three closed wake shapes (supersedes PR 20199; #20148).",
         "carrier": {
-          "pull_request": 20344,
-          "head_sha": "1b4d19176c5986b126b67949757c694bf4da245e"
+          "pull_request": 20361,
+          "head_sha": "aea604cf3ac4f2a61d1ff2018c0a9c8da4de61af"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "f1b516cf1158c312390012b447bc7925610e0160eec0bd6ee53cf5b2df157cfb",
+        "paths": [
+          "scripts/agent_relay/machine_identity.py"
+        ],
+        "issued_at": "2026-11-13T11:10:00Z",
+        "not_after": "2026-11-20T11:10:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 23): agent-toolkit PR 20370's exact protected change at its current merge base. The machine write seam admits extensions.worktreeConfig=true as one inert flag so scout data PRs stop halting on it (#20343).",
+        "carrier": {
+          "pull_request": 20370,
+          "head_sha": "4e640821b4ce7358f7a26535574a00c82feaeeec"
         }
       }
     ]
