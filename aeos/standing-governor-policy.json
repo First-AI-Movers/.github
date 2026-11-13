@@ -188,23 +188,6 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "1e8bab359087e7eb54073ecdf0a01370195af213ea1ed93559f89f4624ce07f7",
-        "paths": [
-          "scripts/agent_relay/control_recovery.py",
-          "scripts/launch_managed_session.py"
-        ],
-        "issued_at": "2026-11-12T20:33:00Z",
-        "not_after": "2026-11-19T20:33:00Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 20): agent-toolkit PR 20262's exact protected change at its current merge base. The managed-session launcher and the private-preparation step of agent-relay control recovery refuse to start a Codex session when the node's no-overage admission refuses, so neither route can draw paid overage credit (#11993).",
-        "carrier": {
-          "pull_request": 20262,
-          "head_sha": "1b388aa593d4525f0bf3ebfa9cdee931b62ec590"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "52c3350e3d7512ed6b14aa62d01e2bbc2244b46a456a0554d3ff1b862edbff6a",
         "paths": [
           "scripts/flight_deck/governed_sessions.py"
@@ -216,6 +199,23 @@
         "carrier": {
           "pull_request": 20199,
           "head_sha": "bc8620795879501742d6b8dbb7bc57b55ef34a90"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "e29ef5d4ef2fafe53d31f4841e8f109b86b9f297660f21fff0c6d677f3a26901",
+        "paths": [
+          "scripts/agent_relay/ledger.py",
+          "scripts/flight_deck/control_ingest.py"
+        ],
+        "issued_at": "2026-11-13T06:55:00Z",
+        "not_after": "2026-11-20T06:55:00Z",
+        "activation": "enabled",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 21): agent-toolkit PR 20300's exact protected change at its current merge base. Eight damaged-store halt and hint messages in the control ingest and the Agent Relay ledger name the owner that clears them instead of sending the reader to the operator, with exception types and halt behaviour unchanged (#20290).",
+        "carrier": {
+          "pull_request": 20300,
+          "head_sha": "25ab64276f2ed7c1c9e2c42005d29efa1015feef"
         }
       }
     ]
