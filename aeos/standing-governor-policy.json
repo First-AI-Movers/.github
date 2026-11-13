@@ -186,6 +186,58 @@
     },
     "accepted_changes": [
       {
+        "activation": "enabled",
+        "carrier": {
+          "pull_request": 20392,
+          "head_sha": "5203395a9b92768512e4fb4fc7b14da7389e81fa"
+        },
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 24): agent-toolkit PR 20392's exact protected change at its current merge base. A drain-exhausted key whose last read was transient is re-queued after a cool-down instead of staying exhausted (Refs #15578).",
+        "issued_at": "2026-11-13T14:45:00Z",
+        "not_after": "2026-11-20T14:45:00Z",
+        "paths": [
+          "scripts/admission_judge/drain.py",
+          "scripts/admission_judge/pickup.py"
+        ],
+        "protected_diff_sha256": "994ebdf8b1b845bdc2eef81da3215ed6741f445e0bd762ea7dfe89ed54dfb6f2",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "schema": "aeos-accepted-change/v1"
+      },
+      {
+        "activation": "enabled",
+        "carrier": {
+          "pull_request": 20398,
+          "head_sha": "2536be5db105bf5ce550a769631fc5ea6f353811"
+        },
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 24): agent-toolkit PR 20398's exact protected change at its current merge base. The machine dispatch route reserves the session record's value-receipt publication origin at dispatch (#20386).",
+        "issued_at": "2026-11-13T14:45:00Z",
+        "not_after": "2026-11-20T14:45:00Z",
+        "paths": [
+          "scripts/agent_relay/remote_dispatch_execute.py",
+          "scripts/agent_relay/remote_node_session.py",
+          "scripts/agent_relay/value_receipt.py"
+        ],
+        "protected_diff_sha256": "70d25e6d2d4cb4552b6ddeb2cd07c1d21cf49231d956a1f5a03b520bcbb993e5",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "schema": "aeos-accepted-change/v1"
+      },
+      {
+        "activation": "enabled",
+        "carrier": {
+          "pull_request": 20408,
+          "head_sha": "b6aa608bae90bbbbd19845fbf48015720f7c9424"
+        },
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 24): agent-toolkit PR 20408's exact protected change at its current merge base. The judge's gate body runs under the toolchain 3.14 interpreter so valid PEP 758 candidates stop failing SYNTAX_ERROR (Refs #15578).",
+        "issued_at": "2026-11-13T14:45:00Z",
+        "not_after": "2026-11-20T14:45:00Z",
+        "paths": [
+          "scripts/admission_shadow/core.py",
+          "scripts/admission_shadow/gate_interpreter.py"
+        ],
+        "protected_diff_sha256": "a9cf1a0fef75e3ea44d523d5ee2f36cdb9b525cf4a9f900095030d0732c76f83",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "schema": "aeos-accepted-change/v1"
+      },
+      {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "a6923b01007dadf06708e13ebfa2fa021abbb6f67939dfad487fe840c4a970c0",
