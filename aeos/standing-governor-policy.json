@@ -204,33 +204,33 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "4f8f60d2382c472119cb7bda1b3d9632b1c2865e39541026f340c07d53de1e41",
+        "protected_diff_sha256": "342ed2e2a40f2ff0865098ef892db8212f0f4a0e364be80a991947e2b3e23bd2",
         "paths": [
-          "scripts/agent_relay/remote_node_session.py"
+          "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-11-14T16:25:00Z",
-        "not_after": "2026-11-21T16:25:00Z",
+        "issued_at": "2026-11-14T19:35:00Z",
+        "not_after": "2026-11-21T19:35:00Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 25): agent-toolkit PR 20606's exact protected change at its current merge base. A record's machine comment-present wake is well-formed, so a parked Governor session is no longer left with a malformed wake (#4152).",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 26): agent-toolkit PR 20536's exact protected change at its current merge base. Governed-session rows carry the session rollup that lane_liveness computes (Refs #20503, Programme #2257).",
         "carrier": {
-          "pull_request": 20606,
-          "head_sha": "aeb776dd54f14c2692da98ad1f22837f4a5744e5"
+          "pull_request": 20536,
+          "head_sha": "7e07f215e214c33e150830ecc13fc9c15b0b59c9"
         }
       },
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "aaa603753d13037c1e43208a430f56b3192e2605dd79f8289d3f1a117f531040",
+        "protected_diff_sha256": "7279b5ec3b4132fdf609f5c50d2ff7192548f3a9ef471a1322c09fc4c6da7eb1",
         "paths": [
-          "scripts/flight_deck/governed_sessions.py"
+          "scripts/agent_relay/remote_node_session.py"
         ],
-        "issued_at": "2026-11-14T16:25:00Z",
-        "not_after": "2026-11-21T16:25:00Z",
+        "issued_at": "2026-11-14T19:35:00Z",
+        "not_after": "2026-11-21T19:35:00Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 25): agent-toolkit PR 20619's exact protected change at its current merge base. The one-per-issue PR metadata query stops requesting statusCheckRollup, pr_checks stays None when the rollup is omitted, and NONE is kept only for an observed empty rollup (#19068).",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 26): agent-toolkit PR 20516's exact protected change at its current merge base. Remote-node-session finalize keeps an already-recorded terminal verdict and still releases the session (Refs #4233, #4142).",
         "carrier": {
-          "pull_request": 20619,
-          "head_sha": "9bedeb41842fbc2190876511f8667c327a0eeafd"
+          "pull_request": 20516,
+          "head_sha": "53bfa50e6e374f0fdf45f6f67ad184a019192673"
         }
       }
     ]
