@@ -188,17 +188,17 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "4bc71baa7ade9cb1a3a7d4bc783962757db755433c5bbd7d8094981e9cea974a",
+        "protected_diff_sha256": "2477e7e00023abbf4c44a34cace976ebf68db166f7552f7f711e0568066587ac",
         "paths": [
           "scripts/agent_relay/standing_seat_governor.py"
         ],
-        "issued_at": "2026-11-15T19:50:00Z",
-        "not_after": "2026-11-22T19:50:00Z",
+        "issued_at": "2026-11-15T23:40:00Z",
+        "not_after": "2026-11-22T23:40:00Z",
         "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 28): agent-toolkit PR 20794's exact protected change at its current merge base. A comment-present park on a series-retired Issue is a defective park, refused at arming and released once (#8463).",
+        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 29): agent-toolkit PR 20815's exact protected change at its current merge base. Built by Launchpad run pine-94 (#8463).",
         "carrier": {
-          "pull_request": 20794,
-          "head_sha": "a30031aaede55718546a0b7f2ee930793e6d3822"
+          "pull_request": 20815,
+          "head_sha": "8f2eee5c87b3fb7ac1e1a198d3d74ee6e8554cbd"
         }
       }
     ]
