@@ -200,6 +200,22 @@
           "pull_request": 20815,
           "head_sha": "8f2eee5c87b3fb7ac1e1a198d3d74ee6e8554cbd"
         }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "5d1dc2da23d06c7cae93abf404beec598580fac2cf355147c2e14a60d327aff8",
+        "paths": [
+          "scripts/agent_relay/auto_candidates.py"
+        ],
+        "issued_at": "2026-11-17T23:51:21Z",
+        "not_after": "2026-11-24T23:51:21Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21048's exact protected change (#3052, batch 30), sizing the Conductor's placement-log budget for a full GitHub issue.",
+        "carrier": {
+          "pull_request": 21048,
+          "head_sha": "9de92a06c68d22082b8363d64856c9b2e2756431"
+        }
       }
     ]
   }
