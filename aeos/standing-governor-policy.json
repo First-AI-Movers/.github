@@ -188,6 +188,22 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "44c451e6bf785117a3ab64eeb7255aeb0ccc168d02ae4430607b62672d3a3415",
+        "paths": [
+          "scripts/agent_relay/dispatcher.py"
+        ],
+        "issued_at": "2026-11-18T05:28:00Z",
+        "not_after": "2026-11-25T05:28:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21072's exact protected change (#3052, batch 31): the dispatcher re-reads the placement log after taking the generation claim and stops when the winner moved (#20162).",
+        "carrier": {
+          "pull_request": 21072,
+          "head_sha": "d7874787eedb2185d2882b1116150f2aa09ccc9b"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "2477e7e00023abbf4c44a34cace976ebf68db166f7552f7f711e0568066587ac",
         "paths": [
           "scripts/agent_relay/standing_seat_governor.py"
