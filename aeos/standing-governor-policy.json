@@ -187,6 +187,22 @@
     "accepted_changes": [
       {
         "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/tailnet-policy",
+        "protected_diff_sha256": "23d0476489e4655c4c7e51b0fc4ba125c356b406662b934c79e5a2a4bc7e096f",
+        "paths": [
+          "policy.hujson"
+        ],
+        "issued_at": "2026-11-22T20:24:15Z",
+        "not_after": "2026-11-29T20:24:15Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts tailnet-policy PR 29's exact protected change (#3052, batch 33): one additive grant letting execution and control nodes reach the registry database port on the control node (#21214, #2989).",
+        "carrier": {
+          "pull_request": 29,
+          "head_sha": "9d2192b7bb34644bdcf56304dedbd9359c8b45f1"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "8d6834846512d2dad350128a848ef88f54b31efb4f1b925347edbc9d2fa39153",
         "paths": [
