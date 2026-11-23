@@ -187,6 +187,22 @@
     "accepted_changes": [
       {
         "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/tailnet-policy",
+        "protected_diff_sha256": "c7a1905fc844b30aa0b0b2620d2e743dacf9049495ea49dd96a0db4bb4117ddd",
+        "paths": [
+          "policy.hujson"
+        ],
+        "issued_at": "2026-11-23T22:48:00Z",
+        "not_after": "2026-11-30T22:48:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts tailnet-policy PR 30's exact protected change (#3052, batch 34): one grant letting the Sentinel observer reach the control node's HTTPS port, with the database-port denial kept (#2989).",
+        "carrier": {
+          "pull_request": 30,
+          "head_sha": "3244114fcb2f30ed95b54a601596ce852eb8a67a"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "82b0c9412fd0e9ceda54d8777b507a474bbc77c14b9dabdbbe641025ea46517d",
         "paths": [
