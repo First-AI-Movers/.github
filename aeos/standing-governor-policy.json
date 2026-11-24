@@ -188,6 +188,38 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "4132604778dbf031efeb60044be3ce970588550fdbb820a11c1c700bd7c813fe",
+        "paths": [
+          "scripts/agent_relay/work_placement.py"
+        ],
+        "issued_at": "2026-11-24T11:30:00Z",
+        "not_after": "2026-12-01T11:30:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 23662's exact protected change (#3052, batch 36): the Dev04 memory-safety gate (a Cell is admitted only while projected MemAvailable stays above the declared floor and memory PSI is bounded), rebuilt from PR 23556 on top of PR 23652's change, so it carries that change too (#5497).",
+        "carrier": {
+          "pull_request": 23662,
+          "head_sha": "0a058dc23a1435163f3e24c603220862531ad2a6"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "a00dc1317c28ccc3385cc6ca00c53a48a4c8f48090cca8fb29f7206e7a2a92b1",
+        "paths": [
+          "scripts/agent_relay/work_placement.py"
+        ],
+        "issued_at": "2026-11-24T11:30:00Z",
+        "not_after": "2026-12-01T11:30:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 23652's exact protected change (#3052, batch 36): the Cell receipt's MemAvailable and MemTotal reach the work-conserving memory operand (rebuild of PR 23600, #5497). PR 23662 carries this same change.",
+        "carrier": {
+          "pull_request": 23652,
+          "head_sha": "3adcf4ce11706fc6eddb0a7de3b008a212dbb919"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
         "protected_diff_sha256": "3f7cfb7c818338a80afefe1273a323bde5fa3b774b5baba3ae163e9439427051",
         "paths": [
           "scripts/admission_judge/drain.py",
@@ -296,71 +328,6 @@
         "carrier": {
           "pull_request": 29,
           "head_sha": "9d2192b7bb34644bdcf56304dedbd9359c8b45f1"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "8d6834846512d2dad350128a848ef88f54b31efb4f1b925347edbc9d2fa39153",
-        "paths": [
-          "scripts/agent_relay/auto_candidates.py",
-          "scripts/agent_relay/work_placement.py"
-        ],
-        "issued_at": "2026-11-18T14:05:00Z",
-        "not_after": "2026-11-25T14:05:00Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21096's exact protected change (#3052, batch 32): storage-aware Development Cell placement (#5497).",
-        "carrier": {
-          "pull_request": 21096,
-          "head_sha": "6376cb1499a518a07bc9c036075e0cfa01de7df0"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "44c451e6bf785117a3ab64eeb7255aeb0ccc168d02ae4430607b62672d3a3415",
-        "paths": [
-          "scripts/agent_relay/dispatcher.py"
-        ],
-        "issued_at": "2026-11-18T05:28:00Z",
-        "not_after": "2026-11-25T05:28:00Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21072's exact protected change (#3052, batch 31): the dispatcher re-reads the placement log after taking the generation claim and stops when the winner moved (#20162).",
-        "carrier": {
-          "pull_request": 21072,
-          "head_sha": "d7874787eedb2185d2882b1116150f2aa09ccc9b"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "2477e7e00023abbf4c44a34cace976ebf68db166f7552f7f711e0568066587ac",
-        "paths": [
-          "scripts/agent_relay/standing_seat_governor.py"
-        ],
-        "issued_at": "2026-11-15T23:40:00Z",
-        "not_after": "2026-11-22T23:40:00Z",
-        "activation": "enabled",
-        "decision": "The operator's approval of this policy change accepts it (agent-toolkit #3052, accepted-change batch 29): agent-toolkit PR 20815's exact protected change at its current merge base. Built by Launchpad run pine-94 (#8463).",
-        "carrier": {
-          "pull_request": 20815,
-          "head_sha": "8f2eee5c87b3fb7ac1e1a198d3d74ee6e8554cbd"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "5d1dc2da23d06c7cae93abf404beec598580fac2cf355147c2e14a60d327aff8",
-        "paths": [
-          "scripts/agent_relay/auto_candidates.py"
-        ],
-        "issued_at": "2026-11-17T23:51:21Z",
-        "not_after": "2026-11-24T23:51:21Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21048's exact protected change (#3052, batch 30), sizing the Conductor's placement-log budget for a full GitHub issue.",
-        "carrier": {
-          "pull_request": 21048,
-          "head_sha": "9de92a06c68d22082b8363d64856c9b2e2756431"
         }
       }
     ]
