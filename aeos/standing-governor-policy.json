@@ -188,6 +188,86 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/tailnet-policy",
+        "protected_diff_sha256": "c7a1905fc844b30aa0b0b2620d2e743dacf9049495ea49dd96a0db4bb4117ddd",
+        "paths": [
+          "policy.hujson"
+        ],
+        "issued_at": "2026-11-23T22:48:00Z",
+        "not_after": "2026-11-30T22:48:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts tailnet-policy PR 30's exact protected change (#3052, batch 34): one grant letting the Sentinel observer reach the control node's HTTPS port, with the database-port denial kept (#2989).",
+        "carrier": {
+          "pull_request": 30,
+          "head_sha": "3244114fcb2f30ed95b54a601596ce852eb8a67a"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "82b0c9412fd0e9ceda54d8777b507a474bbc77c14b9dabdbbe641025ea46517d",
+        "paths": [
+          "scripts/agent_relay/remote_node_session.py"
+        ],
+        "issued_at": "2026-11-23T21:10:00Z",
+        "not_after": "2026-11-30T21:10:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21749's exact protected change (#3052, batch 34): redact catalog secret shapes from public sessions.",
+        "carrier": {
+          "pull_request": 21749,
+          "head_sha": "315f60004023d54b07b5cddbbf8103a8274d11ff"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "b58708f590a3830d16f81f4278289c8117611056b8579d8c649efa2b2a071a00",
+        "paths": [
+          "scripts/admission_judge/drain.py"
+        ],
+        "issued_at": "2026-11-23T21:10:00Z",
+        "not_after": "2026-11-30T21:10:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21382's exact protected change (#3052, batch 34): a crash cannot tear the drain attempt counter.",
+        "carrier": {
+          "pull_request": 21382,
+          "head_sha": "283e75e8e007e01e75bf8edfe1f0761f47a941d9"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "c85eb07cdefa1dcf4960a063d9140d59d3b70823b39f80e15b2e21f63228dfab",
+        "paths": [
+          "scripts/agent_relay/launch_packet.py"
+        ],
+        "issued_at": "2026-11-23T21:10:00Z",
+        "not_after": "2026-11-30T21:10:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21357's exact protected change (#3052, batch 34): the launch prompt shows a real base sha.",
+        "carrier": {
+          "pull_request": 21357,
+          "head_sha": "f8f10357de333814b4ff8bd1b0e85ec31e769ed9"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/agent-toolkit",
+        "protected_diff_sha256": "449ea9e5d962e85fb25e98293df8fd1fd39b41d43acf75888bff2876d0838e13",
+        "paths": [
+          "scripts/flight_deck/governed_sessions.py"
+        ],
+        "issued_at": "2026-11-23T21:10:00Z",
+        "not_after": "2026-11-30T21:10:00Z",
+        "activation": "enabled",
+        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21145's exact protected change (#3052, batch 34): a live harness-exhausted managed Governor row relays HARNESS_EXHAUSTED to Noah.",
+        "carrier": {
+          "pull_request": 21145,
+          "head_sha": "5076b6296e8df58df41326c492a0dcf8b3cb4f40"
+        }
+      },
+      {
+        "schema": "aeos-accepted-change/v1",
+        "repository": "First-AI-Movers/tailnet-policy",
         "protected_diff_sha256": "23d0476489e4655c4c7e51b0fc4ba125c356b406662b934c79e5a2a4bc7e096f",
         "paths": [
           "policy.hujson"
