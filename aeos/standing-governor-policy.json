@@ -188,50 +188,17 @@
       {
         "schema": "aeos-accepted-change/v1",
         "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "4132604778dbf031efeb60044be3ce970588550fdbb820a11c1c700bd7c813fe",
+        "protected_diff_sha256": "f9d863361837d43614e1dc3e39bff25c7e00fc0459dd0f5e540cfa7148ed257c",
         "paths": [
-          "scripts/agent_relay/work_placement.py"
+          "scripts/flight_deck/governed_sessions.py"
         ],
-        "issued_at": "2026-11-24T11:30:00Z",
-        "not_after": "2026-12-01T11:30:00Z",
+        "issued_at": "2026-11-28T06:30:00Z",
+        "not_after": "2026-12-05T06:30:00Z",
         "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 23662's exact protected change (#3052, batch 36): the Dev04 memory-safety gate (a Cell is admitted only while projected MemAvailable stays above the declared floor and memory PSI is bounded), rebuilt from PR 23556 on top of PR 23652's change, so it carries that change too (#5497).",
+        "decision": "Accepts agent-toolkit PR 24543's exact protected change (#3052, batch 37): Dev03 (at-dev-cvps12-03) leaves GOVERNED_SESSIONS_NODE_IDS in the Flight Deck governed-sessions roster, with a two-line comment (#6949). A successor carrier with the same protected bytes is admitted on this digest.",
         "carrier": {
-          "pull_request": 23662,
-          "head_sha": "0a058dc23a1435163f3e24c603220862531ad2a6"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "a00dc1317c28ccc3385cc6ca00c53a48a4c8f48090cca8fb29f7206e7a2a92b1",
-        "paths": [
-          "scripts/agent_relay/work_placement.py"
-        ],
-        "issued_at": "2026-11-24T11:30:00Z",
-        "not_after": "2026-12-01T11:30:00Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 23652's exact protected change (#3052, batch 36): the Cell receipt's MemAvailable and MemTotal reach the work-conserving memory operand (rebuild of PR 23600, #5497). PR 23662 carries this same change.",
-        "carrier": {
-          "pull_request": 23652,
-          "head_sha": "3adcf4ce11706fc6eddb0a7de3b008a212dbb919"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "3f7cfb7c818338a80afefe1273a323bde5fa3b774b5baba3ae163e9439427051",
-        "paths": [
-          "scripts/admission_judge/drain.py",
-          "scripts/admission_judge/pickup.py"
-        ],
-        "issued_at": "2026-11-24T07:00:00Z",
-        "not_after": "2026-12-01T07:00:00Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 23611's exact protected change (#3052, batch 35): a no-verdict delivery exhaustion is re-armed once after the cool-off (#21226).",
-        "carrier": {
-          "pull_request": 23611,
-          "head_sha": "b6cfc109e98f766ad89efb3a44e723870446d7ff"
+          "pull_request": 24543,
+          "head_sha": "74db4c64c0f0cddbe3d33fcd6332a72b13e98c7a"
         }
       },
       {
@@ -248,70 +215,6 @@
         "carrier": {
           "pull_request": 30,
           "head_sha": "3244114fcb2f30ed95b54a601596ce852eb8a67a"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "82b0c9412fd0e9ceda54d8777b507a474bbc77c14b9dabdbbe641025ea46517d",
-        "paths": [
-          "scripts/agent_relay/remote_node_session.py"
-        ],
-        "issued_at": "2026-11-23T21:10:00Z",
-        "not_after": "2026-11-30T21:10:00Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21749's exact protected change (#3052, batch 34): redact catalog secret shapes from public sessions.",
-        "carrier": {
-          "pull_request": 21749,
-          "head_sha": "315f60004023d54b07b5cddbbf8103a8274d11ff"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "b58708f590a3830d16f81f4278289c8117611056b8579d8c649efa2b2a071a00",
-        "paths": [
-          "scripts/admission_judge/drain.py"
-        ],
-        "issued_at": "2026-11-23T21:10:00Z",
-        "not_after": "2026-11-30T21:10:00Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21382's exact protected change (#3052, batch 34): a crash cannot tear the drain attempt counter.",
-        "carrier": {
-          "pull_request": 21382,
-          "head_sha": "283e75e8e007e01e75bf8edfe1f0761f47a941d9"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "c85eb07cdefa1dcf4960a063d9140d59d3b70823b39f80e15b2e21f63228dfab",
-        "paths": [
-          "scripts/agent_relay/launch_packet.py"
-        ],
-        "issued_at": "2026-11-23T21:10:00Z",
-        "not_after": "2026-11-30T21:10:00Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21357's exact protected change (#3052, batch 34): the launch prompt shows a real base sha.",
-        "carrier": {
-          "pull_request": 21357,
-          "head_sha": "f8f10357de333814b4ff8bd1b0e85ec31e769ed9"
-        }
-      },
-      {
-        "schema": "aeos-accepted-change/v1",
-        "repository": "First-AI-Movers/agent-toolkit",
-        "protected_diff_sha256": "449ea9e5d962e85fb25e98293df8fd1fd39b41d43acf75888bff2876d0838e13",
-        "paths": [
-          "scripts/flight_deck/governed_sessions.py"
-        ],
-        "issued_at": "2026-11-23T21:10:00Z",
-        "not_after": "2026-11-30T21:10:00Z",
-        "activation": "enabled",
-        "decision": "The operator's exact-head approval of this policy change accepts agent-toolkit PR 21145's exact protected change (#3052, batch 34): a live harness-exhausted managed Governor row relays HARNESS_EXHAUSTED to Noah.",
-        "carrier": {
-          "pull_request": 21145,
-          "head_sha": "5076b6296e8df58df41326c492a0dcf8b3cb4f40"
         }
       },
       {
